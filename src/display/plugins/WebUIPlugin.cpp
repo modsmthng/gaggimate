@@ -23,6 +23,18 @@
 static std::unordered_map<uint32_t, std::string> rxBuffers;
 static WebUIPlugin *g_webUIPlugin = nullptr;
 
+namespace {
+template <typename T>
+auto readDiscoveredScaleRSSI(const T &device, int) -> decltype(device.getRSSI()) {
+    return device.getRSSI();
+}
+
+template <typename T>
+int readDiscoveredScaleRSSI(const T &, long) {
+    return 0;
+}
+} // namespace
+
 WebUIPlugin::WebUIPlugin() : server(80), ws("/ws") { g_webUIPlugin = this; }
 
 void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) {
@@ -667,7 +679,7 @@ void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {
         JsonDocument scale;
         scale["uuid"] = device.getAddress().toString();
         scale["name"] = device.getName();
-        scale["rssi"] = device.getRSSI();
+        scale["rssi"] = readDiscoveredScaleRSSI(device, 0);
         scalesArray.add(scale);
     }
     AsyncResponseStream *response = request->beginResponseStream("application/json");

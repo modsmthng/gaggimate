@@ -13,6 +13,7 @@ class Controller;
 
 constexpr int RERENDER_INTERVAL_IDLE = 2500;
 constexpr int RERENDER_INTERVAL_ACTIVE = 100;
+constexpr unsigned long PROFILE_LIST_SELECTION_FEEDBACK_MS = 200;
 
 constexpr int TEMP_HISTORY_INTERVAL = 250;
 constexpr int TEMP_HISTORY_LENGTH = 20 * 1000 / TEMP_HISTORY_INTERVAL;
@@ -20,6 +21,7 @@ constexpr int TEMP_HISTORY_LENGTH = 20 * 1000 / TEMP_HISTORY_INTERVAL;
 int16_t calculate_angle(int set_temp, int range, int offset);
 
 enum class BrewScreenState { Brew, Settings };
+enum class ProfileSelectorView { Detail, List };
 
 class DefaultUI {
   public:
@@ -38,6 +40,10 @@ class DefaultUI {
     void onNextProfile();
     void onPreviousProfile();
     void onProfileSelect();
+    void onProfileScreenBack();
+    void onProfileSelectorListOpen();
+    void onProfileListEntrySelect(int index);
+    bool isProfileSelectorListView() const { return currentProfileSelectorView == ProfileSelectorView::List; }
     void setBrightness(int brightness) {
         if (panelDriver) {
             panelDriver->setBrightness(brightness);
@@ -77,6 +83,11 @@ class DefaultUI {
     void updateTempStableFlag();
     void adjustHeatingIndicator(lv_obj_t *contentPanel);
     void reloadProfiles();
+    void syncCurrentProfileIdxToSelectedProfile();
+    void syncProfileListIdxToSelectedProfile();
+    void updateProfileSelectorView();
+    void rebuildProfileList();
+    void updateProfileListSelection(bool scrollToCurrent);
 
     Driver *panelDriver = nullptr;
     Controller *controller;
@@ -122,12 +133,20 @@ class DefaultUI {
     int heatingFlash = 0;
     double bluetoothWeight = 0.0;
     BrewScreenState brewScreenState = BrewScreenState::Brew;
+    ProfileSelectorView currentProfileSelectorView = ProfileSelectorView::Detail;
+    ProfileSelectorView lastProfileSelectorView = ProfileSelectorView::Detail;
 
     int profileDirty = 0;
     int currentProfileIdx;
+    int profileListCurrentIdx = 0;
     int profileLoaded = 0;
+    bool pendingProfileListSelection = false;
+    unsigned long pendingProfileListSelectionAt = 0;
     std::vector<String> favoritedProfileIds;
     std::vector<Profile> favoritedProfiles;
+    std::vector<String> profileListProfileIds;
+    std::vector<Profile> profileListProfiles;
+    std::vector<lv_obj_t *> profileListRows;
     int currentThemeMode = -1; // Force applyTheme on first loop
 
     // Screen change

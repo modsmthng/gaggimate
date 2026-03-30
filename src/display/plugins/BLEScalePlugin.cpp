@@ -15,6 +15,18 @@
 #include <scales/varia.h>
 #include <scales/weighmybru.h>
 
+namespace {
+template <typename T>
+auto readScaleRSSI(const T *scale, int) -> decltype(scale->getRSSI()) {
+    return scale->getRSSI();
+}
+
+template <typename T>
+int readScaleRSSI(const T *, long) {
+    return 0;
+}
+} // namespace
+
 void on_ble_measurement(float value) {
     if (&BLEScales != nullptr) {
         BLEScales.onMeasurement(value);
@@ -24,6 +36,13 @@ void on_ble_measurement(float value) {
 BLEScalePlugin BLEScales;
 
 BLEScalePlugin::BLEScalePlugin() = default;
+
+int BLEScalePlugin::getRSSI() const {
+    if (scale != nullptr && scale->isConnected()) {
+        return readScaleRSSI(scale.get(), 0);
+    }
+    return 0;
+}
 
 BLEScalePlugin::~BLEScalePlugin() {
     // Disable active flag first to stop processing
