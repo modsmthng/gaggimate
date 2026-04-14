@@ -19,7 +19,10 @@ lv_obj_t *ui_ProfileScreen_previousProfileBtn = NULL;
 lv_obj_t *ui_ProfileScreen_nextProfileBtn = NULL;
 lv_obj_t *ui_ProfileScreen_loadingSpinner = NULL;
 lv_obj_t *ui_ProfileScreen_profileDetails = NULL;
+lv_obj_t *ui_ProfileScreen_listView = NULL;
 lv_obj_t *ui_ProfileScreen_chooseButton = NULL;
+lv_obj_t *ui_ProfileScreen_listMainLabel = NULL;
+lv_obj_t *ui_ProfileScreen_profileList = NULL;
 lv_obj_t *ui_ProfileScreen_simpleContent = NULL;
 lv_obj_t *ui_ProfileScreen_phasesLabel = NULL;
 lv_obj_t *ui_ProfileScreen_stepsLabel = NULL;
@@ -37,15 +40,15 @@ void ui_event_ProfileScreen(lv_event_t *e) {
 
     if (event_code == LV_EVENT_GESTURE && lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_TOP) {
         lv_indev_wait_release(lv_indev_get_act());
-        onMenuClick(e);
+        onProfileGestureMenu(e);
     }
     if (event_code == LV_EVENT_GESTURE && lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_LEFT) {
         lv_indev_wait_release(lv_indev_get_act());
-        onNextProfile(e);
+        onProfileGestureNext(e);
     }
     if (event_code == LV_EVENT_GESTURE && lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_RIGHT) {
         lv_indev_wait_release(lv_indev_get_act());
-        onPreviousProfile(e);
+        onProfileGesturePrevious(e);
     }
     if (event_code == LV_EVENT_SCREEN_LOADED) {
         onProfileScreenLoad(e);
@@ -56,7 +59,15 @@ void ui_event_ProfileScreen_ImgButton1(lv_event_t *e) {
     lv_event_code_t event_code = lv_event_get_code(e);
 
     if (event_code == LV_EVENT_CLICKED) {
-        onMenuClick(e);
+        onProfileScreenBack(e);
+    }
+}
+
+void ui_event_ProfileScreen_profileName(lv_event_t *e) {
+    lv_event_code_t event_code = lv_event_get_code(e);
+
+    if (event_code == LV_EVENT_CLICKED) {
+        onProfileSelectorListOpen(e);
     }
 }
 
@@ -175,7 +186,7 @@ void ui_ProfileScreen_screen_init(void) {
     lv_obj_set_align(ui_ProfileScreen_profileDetails, LV_ALIGN_CENTER);
     lv_obj_clear_flag(ui_ProfileScreen_profileDetails, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE); /// Flags
 
-    ui_ProfileScreen_chooseButton = lv_imgbtn_create(ui_ProfileScreen_profileDetails);
+    ui_ProfileScreen_chooseButton = lv_imgbtn_create(ui_ProfileScreen_contentPanel);
     lv_imgbtn_set_src(ui_ProfileScreen_chooseButton, LV_IMGBTN_STATE_RELEASED, NULL, &ui_img_631115820, NULL);
     lv_obj_set_width(ui_ProfileScreen_chooseButton, 40);
     lv_obj_set_height(ui_ProfileScreen_chooseButton, 40);
@@ -186,6 +197,46 @@ void ui_ProfileScreen_screen_init(void) {
                                            _ui_theme_color_NiceWhite);
     ui_object_set_themeable_style_property(ui_ProfileScreen_chooseButton, LV_PART_MAIN | LV_STATE_DEFAULT,
                                            LV_STYLE_IMG_RECOLOR_OPA, _ui_theme_alpha_NiceWhite);
+
+    ui_ProfileScreen_listView = lv_obj_create(ui_ProfileScreen_contentPanel);
+    lv_obj_remove_style_all(ui_ProfileScreen_listView);
+    lv_obj_set_width(ui_ProfileScreen_listView, 360);
+    lv_obj_set_height(ui_ProfileScreen_listView, 360);
+    lv_obj_set_align(ui_ProfileScreen_listView, LV_ALIGN_CENTER);
+    lv_obj_add_flag(ui_ProfileScreen_listView, LV_OBJ_FLAG_HIDDEN);                               /// Flags
+    lv_obj_clear_flag(ui_ProfileScreen_listView, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE); /// Flags
+
+    ui_ProfileScreen_listMainLabel = lv_label_create(ui_ProfileScreen_listView);
+    lv_obj_set_width(ui_ProfileScreen_listMainLabel, LV_SIZE_CONTENT);  /// 1
+    lv_obj_set_height(ui_ProfileScreen_listMainLabel, LV_SIZE_CONTENT); /// 1
+    lv_obj_set_x(ui_ProfileScreen_listMainLabel, 0);
+    lv_obj_set_y(ui_ProfileScreen_listMainLabel, -140);
+    lv_obj_set_align(ui_ProfileScreen_listMainLabel, LV_ALIGN_CENTER);
+    lv_label_set_text(ui_ProfileScreen_listMainLabel, "Select profile");
+    ui_object_set_themeable_style_property(ui_ProfileScreen_listMainLabel, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_TEXT_COLOR,
+                                           _ui_theme_color_NiceWhite);
+    ui_object_set_themeable_style_property(ui_ProfileScreen_listMainLabel, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_TEXT_OPA,
+                                           _ui_theme_alpha_NiceWhite);
+    lv_obj_set_style_text_font(ui_ProfileScreen_listMainLabel, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_ProfileScreen_profileList = lv_obj_create(ui_ProfileScreen_listView);
+    lv_obj_remove_style_all(ui_ProfileScreen_profileList);
+    lv_obj_set_width(ui_ProfileScreen_profileList, 280);
+    lv_obj_set_height(ui_ProfileScreen_profileList, 220);
+    lv_obj_set_x(ui_ProfileScreen_profileList, 0);
+    lv_obj_set_y(ui_ProfileScreen_profileList, -5);
+    lv_obj_set_align(ui_ProfileScreen_profileList, LV_ALIGN_CENTER);
+    lv_obj_set_flex_flow(ui_ProfileScreen_profileList, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(ui_ProfileScreen_profileList, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scroll_dir(ui_ProfileScreen_profileList, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(ui_ProfileScreen_profileList, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(ui_ProfileScreen_profileList, LV_OBJ_FLAG_CLICKABLE); /// Flags
+    lv_obj_set_style_bg_opa(ui_ProfileScreen_profileList, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_ProfileScreen_profileList, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui_ProfileScreen_profileList, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui_ProfileScreen_profileList, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_row(ui_ProfileScreen_profileList, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_move_foreground(ui_ProfileScreen_chooseButton);
 
     ui_ProfileScreen_simpleContent = lv_obj_create(ui_ProfileScreen_profileDetails);
     lv_obj_remove_style_all(ui_ProfileScreen_simpleContent);
@@ -281,6 +332,8 @@ void ui_ProfileScreen_screen_init(void) {
     lv_obj_set_x(ui_ProfileScreen_profileName, 0);
     lv_obj_set_y(ui_ProfileScreen_profileName, -90);
     lv_obj_set_align(ui_ProfileScreen_profileName, LV_ALIGN_CENTER);
+    lv_obj_add_flag(ui_ProfileScreen_profileName, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(ui_ProfileScreen_profileName, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_long_mode(ui_ProfileScreen_profileName, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_label_set_text(ui_ProfileScreen_profileName, "Cremina Lever");
     ui_object_set_themeable_style_property(ui_ProfileScreen_profileName, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_TEXT_COLOR,
@@ -349,6 +402,7 @@ void ui_ProfileScreen_screen_init(void) {
     lv_obj_set_style_text_font(ui_ProfileScreen_targetDuration2, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     lv_obj_add_event_cb(ui_ProfileScreen_ImgButton1, ui_event_ProfileScreen_ImgButton1, LV_EVENT_ALL, NULL);
+    lv_obj_add_event_cb(ui_ProfileScreen_profileName, ui_event_ProfileScreen_profileName, LV_EVENT_ALL, NULL);
     lv_obj_add_event_cb(ui_ProfileScreen_previousProfileBtn, ui_event_ProfileScreen_previousProfileBtn, LV_EVENT_ALL, NULL);
     lv_obj_add_event_cb(ui_ProfileScreen_nextProfileBtn, ui_event_ProfileScreen_nextProfileBtn, LV_EVENT_ALL, NULL);
     lv_obj_add_event_cb(ui_ProfileScreen_chooseButton, ui_event_ProfileScreen_chooseButton, LV_EVENT_ALL, NULL);
@@ -380,7 +434,10 @@ void ui_ProfileScreen_screen_destroy(void) {
     ui_ProfileScreen_nextProfileBtn = NULL;
     ui_ProfileScreen_loadingSpinner = NULL;
     ui_ProfileScreen_profileDetails = NULL;
+    ui_ProfileScreen_listView = NULL;
     ui_ProfileScreen_chooseButton = NULL;
+    ui_ProfileScreen_listMainLabel = NULL;
+    ui_ProfileScreen_profileList = NULL;
     ui_ProfileScreen_simpleContent = NULL;
     ui_ProfileScreen_phasesLabel = NULL;
     ui_ProfileScreen_stepsLabel = NULL;

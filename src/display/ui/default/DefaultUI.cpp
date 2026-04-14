@@ -1,7 +1,9 @@
 #include "DefaultUI.h"
 
+#include <algorithm>
+#include <cstdint>
+
 #include <WiFi.h>
-#include <utility>
 #include <display/core/Controller.h>
 #include <display/core/process/BrewProcess.h>
 #include <display/core/process/Process.h>
@@ -74,7 +76,11 @@ void DefaultUI::adjustHeatingIndicator(lv_obj_t *dials) {
     }
 }
 
-void DefaultUI::reloadProfiles() { profileLoaded = 0; }
+void DefaultUI::reloadProfiles() {
+    profileLoaded = 0;
+    pendingProfileListSelection = false;
+    profileListRows.clear();
+}
 
 DefaultUI::DefaultUI(Controller *controller, Driver *driver, PluginManager *pluginManager)
     : controller(controller), panelDriver(driver), pluginManager(pluginManager) {
@@ -170,10 +176,6 @@ void DefaultUI::init() {
         }
         pressureAvailable = controller->getSystemInfo().capabilities.pressure;
     });
-    pluginManager->on("controller:bluetooth:disconnect", [this](Event const &) {
-        waitingForController = true;
-        rerender = true;
-    });
     pluginManager->on("controller:wifi:connect", [this](Event const &event) {
         rerender = true;
         apActive = event.getInt("AP");
@@ -236,6 +238,15 @@ void DefaultUI::loop() {
         lastTempLog = now;
     }
 
+    if (pendingProfileListSelection) {
+        if (lv_scr_act() != ui_ProfileScreen || currentProfileSelectorView != ProfileSelectorView::List) {
+            pendingProfileListSelection = false;
+        } else if (now - pendingProfileListSelectionAt >= PROFILE_LIST_SELECTION_FEEDBACK_MS) {
+            pendingProfileListSelection = false;
+            onProfileSelect();
+        }
+    }
+
     if ((controller->isActive() && diff > RERENDER_INTERVAL_ACTIVE) || diff > RERENDER_INTERVAL_IDLE) {
         rerender = true;
     }
@@ -273,21 +284,49 @@ void DefaultUI::loop() {
 
 void DefaultUI::loopProfiles() {
     if (!profileLoaded) {
-        const auto favoritedIds = profileManager->getFavoritedProfiles();
         favoritedProfileIds.clear();
         favoritedProfiles.clear();
-        favoritedProfileIds.reserve(favoritedIds.size() + 1);
+        profileListProfiles.clear();
+
         favoritedProfileIds.emplace_back(controller->getSettings().getSelectedProfile());
-        for (const auto &id : favoritedIds) {
-            if (std::find(favoritedProfileIds.begin(), favoritedProfileIds.end(), id) == favoritedProfileIds.end())
+        for (auto &id : profileManager->getFavoritedProfiles()) {
+            if (std::find(favoritedProfileIds.begin(), favoritedProfileIds.end(), id) == favoritedProfileIds.end()) {
                 favoritedProfileIds.emplace_back(id);
+            }
         }
-        favoritedProfiles.reserve(favoritedProfileIds.size());
+
         for (const auto &profileId : favoritedProfileIds) {
             Profile profile{};
             profileManager->loadProfile(profileId, profile);
-            favoritedProfiles.emplace_back(std::move(profile));
+            favoritedProfiles.emplace_back(profile);
         }
+
+        std::vector<String> orderedProfileListIds;
+        orderedProfileListIds.reserve(favoritedProfileIds.size());
+
+        for (const auto &profileId : profileListProfileIds) {
+            if (std::find(favoritedProfileIds.begin(), favoritedProfileIds.end(), profileId) != favoritedProfileIds.end() &&
+                std::find(orderedProfileListIds.begin(), orderedProfileListIds.end(), profileId) == orderedProfileListIds.end()) {
+                orderedProfileListIds.emplace_back(profileId);
+            }
+        }
+
+        for (const auto &profileId : favoritedProfileIds) {
+            if (std::find(orderedProfileListIds.begin(), orderedProfileListIds.end(), profileId) == orderedProfileListIds.end()) {
+                orderedProfileListIds.emplace_back(profileId);
+            }
+        }
+
+        profileListProfileIds = std::move(orderedProfileListIds);
+
+        for (const auto &profileId : profileListProfileIds) {
+            Profile profile{};
+            profileManager->loadProfile(profileId, profile);
+            profileListProfiles.emplace_back(profile);
+        }
+
+        syncCurrentProfileIdxToSelectedProfile();
+        syncProfileListIdxToSelectedProfile();
         profileLoaded = 1;
     }
 }
@@ -306,19 +345,49 @@ void DefaultUI::changeBrewScreenMode(BrewScreenState state) {
     rerender = true;
 }
 
-void DefaultUI::onProfileSwitch() {
+void DefaultUI::syncCurrentProfileIdxToSelectedProfile() {
     currentProfileIdx = 0;
+
+    auto selected = std::find(favoritedProfileIds.begin(), favoritedProfileIds.end(), selectedProfileId);
+    if (selected != favoritedProfileIds.end()) {
+        currentProfileIdx = static_cast<int>(std::distance(favoritedProfileIds.begin(), selected));
+    }
+}
+
+void DefaultUI::syncProfileListIdxToSelectedProfile() {
+    profileListCurrentIdx = 0;
+
+    auto selected = std::find(profileListProfileIds.begin(), profileListProfileIds.end(), selectedProfileId);
+    if (selected != profileListProfileIds.end()) {
+        profileListCurrentIdx = static_cast<int>(std::distance(profileListProfileIds.begin(), selected));
+    }
+}
+
+void DefaultUI::onProfileSwitch() {
+    syncCurrentProfileIdxToSelectedProfile();
+    syncProfileListIdxToSelectedProfile();
+    pendingProfileListSelection = false;
+    currentProfileSelectorView = lastProfileSelectorView;
+    profileListRows.clear();
     changeScreen(&ui_ProfileScreen, ui_ProfileScreen_screen_init);
 }
 
 void DefaultUI::onNextProfile() {
-    if (currentProfileIdx < favoritedProfileIds.size() - 1) {
+    if (!profileLoaded || favoritedProfileIds.empty()) {
+        return;
+    }
+
+    if (currentProfileIdx < static_cast<int>(favoritedProfileIds.size()) - 1) {
         currentProfileIdx++;
     }
     rerender = true;
 }
 
 void DefaultUI::onPreviousProfile() {
+    if (!profileLoaded || favoritedProfileIds.empty()) {
+        return;
+    }
+
     if (currentProfileIdx > 0) {
         currentProfileIdx--;
     }
@@ -326,9 +395,62 @@ void DefaultUI::onPreviousProfile() {
 }
 
 void DefaultUI::onProfileSelect() {
-    profileManager->selectProfile(favoritedProfileIds[currentProfileIdx]);
+    if (!profileLoaded) {
+        return;
+    }
+
+    const bool listView = currentProfileSelectorView == ProfileSelectorView::List;
+    const auto &activeProfileIds = listView ? profileListProfileIds : favoritedProfileIds;
+    const int activeProfileIdx = listView ? profileListCurrentIdx : currentProfileIdx;
+
+    if (activeProfileIdx < 0 || activeProfileIdx >= static_cast<int>(activeProfileIds.size())) {
+        return;
+    }
+
+    pendingProfileListSelection = false;
+    lastProfileSelectorView = currentProfileSelectorView;
+    profileManager->selectProfile(activeProfileIds[activeProfileIdx]);
     profileDirty = false;
     changeScreen(&ui_BrewScreen, ui_BrewScreen_screen_init);
+}
+
+void DefaultUI::onProfileScreenBack() {
+    pendingProfileListSelection = false;
+
+    if (currentProfileSelectorView == ProfileSelectorView::List) {
+        currentProfileSelectorView = ProfileSelectorView::Detail;
+        lastProfileSelectorView = ProfileSelectorView::Detail;
+        rerender = true;
+        return;
+    }
+
+    controller->deactivate();
+    controller->setMode(MODE_BREW);
+    changeScreen(&ui_MenuScreen, &ui_MenuScreen_screen_init);
+}
+
+void DefaultUI::onProfileSelectorListOpen() {
+    pendingProfileListSelection = false;
+    syncProfileListIdxToSelectedProfile();
+    currentProfileSelectorView = ProfileSelectorView::List;
+    lastProfileSelectorView = ProfileSelectorView::List;
+    rerender = true;
+}
+
+void DefaultUI::onProfileListEntrySelect(int index) {
+    if (index < 0 || index >= static_cast<int>(profileListProfiles.size())) {
+        return;
+    }
+
+    profileListCurrentIdx = index;
+    if (currentProfileSelectorView == ProfileSelectorView::List) {
+        pendingProfileListSelection = true;
+        pendingProfileListSelectionAt = millis();
+        rerender = true;
+        return;
+    }
+
+    rerender = true;
 }
 
 void DefaultUI::onVolumetricDelete() {
@@ -369,6 +491,99 @@ void DefaultUI::setupState() {
     selectedProfileId = settings.getSelectedProfile();
     profileManager->loadSelectedProfile(selectedProfile);
     profileVolumetric = selectedProfile.isVolumetric();
+}
+
+void DefaultUI::updateProfileSelectorView() {
+    const bool listView = currentProfileSelectorView == ProfileSelectorView::List;
+    const bool detailLoaded =
+        profileLoaded && currentProfileIdx >= 0 && currentProfileIdx < static_cast<int>(favoritedProfiles.size());
+    const bool listLoaded =
+        profileLoaded && profileListCurrentIdx >= 0 && profileListCurrentIdx < static_cast<int>(profileListProfiles.size());
+    const bool loaded = listView ? listLoaded : detailLoaded;
+
+    _ui_flag_modify(ui_ProfileScreen_loadingSpinner, LV_OBJ_FLAG_HIDDEN,
+                    loaded ? _UI_MODIFY_FLAG_ADD : _UI_MODIFY_FLAG_REMOVE);
+    _ui_flag_modify(ui_ProfileScreen_chooseButton, LV_OBJ_FLAG_HIDDEN,
+                    loaded && !listView ? _UI_MODIFY_FLAG_REMOVE : _UI_MODIFY_FLAG_ADD);
+    _ui_flag_modify(ui_ProfileScreen_profileDetails, LV_OBJ_FLAG_HIDDEN,
+                    loaded && !listView ? _UI_MODIFY_FLAG_REMOVE : _UI_MODIFY_FLAG_ADD);
+    _ui_flag_modify(ui_ProfileScreen_listView, LV_OBJ_FLAG_HIDDEN,
+                    listView ? _UI_MODIFY_FLAG_REMOVE : _UI_MODIFY_FLAG_ADD);
+    _ui_flag_modify(ui_ProfileScreen_previousProfileBtn, LV_OBJ_FLAG_HIDDEN,
+                    loaded && !listView ? _UI_MODIFY_FLAG_REMOVE : _UI_MODIFY_FLAG_ADD);
+    _ui_flag_modify(ui_ProfileScreen_nextProfileBtn, LV_OBJ_FLAG_HIDDEN,
+                    loaded && !listView ? _UI_MODIFY_FLAG_REMOVE : _UI_MODIFY_FLAG_ADD);
+
+    if (!loaded) {
+        return;
+    }
+
+    lv_imgbtn_set_src(ui_ProfileScreen_ImgButton1, LV_IMGBTN_STATE_RELEASED, nullptr,
+                      listView ? &ui_img_98036921 : &ui_img_295763949, nullptr);
+    lv_label_set_text(ui_ProfileScreen_mainLabel, currentProfileIdx == 0 ? "Current profile" : "Select profile");
+    lv_label_set_text(ui_ProfileScreen_listMainLabel, "Select profile");
+}
+
+void DefaultUI::rebuildProfileList() {
+    profileListRows.clear();
+
+    if (ui_ProfileScreen_profileList == nullptr) {
+        return;
+    }
+
+    lv_obj_clean(ui_ProfileScreen_profileList);
+
+    for (size_t idx = 0; idx < profileListProfiles.size(); ++idx) {
+        lv_obj_t *row = lv_obj_create(ui_ProfileScreen_profileList);
+        lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_radius(row, 18, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(row, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(row, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_opa(row, LV_OPA_30, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(row, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_left(row, 14, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_right(row, 14, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_top(row, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_bottom(row, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+        lv_obj_t *label = lv_label_create(row);
+        lv_obj_set_width(label, 230);
+        lv_obj_set_height(label, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(label, profileListProfiles[idx].label.c_str());
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+
+        lv_obj_add_event_cb(row, ::onProfileListEntrySelect, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<intptr_t>(idx)));
+        profileListRows.push_back(row);
+    }
+}
+
+void DefaultUI::updateProfileListSelection(bool scrollToCurrent) {
+    if (ui_ProfileScreen_profileList == nullptr) {
+        return;
+    }
+
+    for (size_t idx = 0; idx < profileListRows.size(); ++idx) {
+        lv_obj_t *row = profileListRows[idx];
+        lv_obj_t *label = lv_obj_get_child(row, 0);
+        const bool selected = static_cast<int>(idx) == profileListCurrentIdx;
+
+        lv_obj_set_style_bg_opa(row, selected ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_opa(row, selected ? LV_OPA_TRANSP : LV_OPA_30, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(label, selected ? lv_color_hex(0x000000) : lv_color_hex(0xFFFFFF),
+                                    LV_PART_MAIN | LV_STATE_DEFAULT);
+
+        if (selected && scrollToCurrent) {
+            lv_obj_scroll_to_view(row, LV_ANIM_OFF);
+        }
+    }
 }
 
 void DefaultUI::setupReactive() {
@@ -526,11 +741,24 @@ void DefaultUI::setupReactive() {
                           [=]() {
                               if (brewVolumetric) {
                                   lv_label_set_text_fmt(ui_BrewScreen_targetDuration, "%.1fg", targetVolume);
+                                  lv_label_set_text_fmt(ui_BrewScreen_modeTargetLabel, "%.1fg", targetVolume);
                               } else {
                                   const double secondsDouble = targetDuration;
                                   const auto minutes = static_cast<int>(secondsDouble / 60.0);
                                   const auto seconds = static_cast<int>(secondsDouble) % 60;
+                                  const auto roundedSeconds = static_cast<int>(secondsDouble + 0.5);
                                   lv_label_set_text_fmt(ui_BrewScreen_targetDuration, "%2d:%02d", minutes, seconds);
+                                  if (roundedSeconds < 60) {
+                                      lv_label_set_text_fmt(ui_BrewScreen_modeTargetLabel, "%ds", roundedSeconds);
+                                  } else {
+                                      const auto roundedTenths = static_cast<int>(secondsDouble / 6.0 + 0.5);
+                                      if (roundedTenths % 10 == 0) {
+                                          lv_label_set_text_fmt(ui_BrewScreen_modeTargetLabel, "%dmin", roundedTenths / 10);
+                                      } else {
+                                          lv_label_set_text_fmt(ui_BrewScreen_modeTargetLabel, "%.1fmin",
+                                                                static_cast<double>(roundedTenths) / 10.0);
+                                      }
+                                  }
                               }
                           },
                           &targetDuration, &targetVolume, &brewVolumetric);
@@ -588,17 +816,26 @@ void DefaultUI::setupReactive() {
                           },
                           &grindActive);
     effect_mgr.use_effect([=] { return currentScreen == ui_BrewScreen; },
-                          [=] { lv_label_set_text(ui_BrewScreen_profileName, selectedProfile.label.c_str()); },
+                          [=] {
+                              lv_label_set_text(ui_BrewScreen_profileName, selectedProfile.label.c_str());
+                              ui_BrewScreen_refresh_profile_name_scroll();
+                          },
                           &selectedProfileId);
 
     effect_mgr.use_effect(
         [=] { return currentScreen == ui_ProfileScreen; },
         [=] {
-            if (profileLoaded) {
-                _ui_flag_modify(ui_ProfileScreen_profileDetails, LV_OBJ_FLAG_HIDDEN, _UI_MODIFY_FLAG_REMOVE);
-                _ui_flag_modify(ui_ProfileScreen_loadingSpinner, LV_OBJ_FLAG_HIDDEN, _UI_MODIFY_FLAG_ADD);
+            updateProfileSelectorView();
+
+            const bool detailLoaded =
+                profileLoaded && currentProfileIdx >= 0 && currentProfileIdx < static_cast<int>(favoritedProfiles.size());
+            const bool listLoaded =
+                profileLoaded && profileListCurrentIdx >= 0 && profileListCurrentIdx < static_cast<int>(profileListProfiles.size());
+            const bool hasPrevious = detailLoaded && currentProfileIdx > 0;
+            const bool hasNext = detailLoaded && currentProfileIdx < static_cast<int>(favoritedProfiles.size()) - 1;
+
+            if (detailLoaded) {
                 lv_label_set_text(ui_ProfileScreen_profileName, favoritedProfiles[currentProfileIdx].label.c_str());
-                lv_label_set_text(ui_ProfileScreen_mainLabel, currentProfileIdx == 0 ? "Current profile" : "Select profile");
 
                 const auto minutes = static_cast<int>(favoritedProfiles[currentProfileIdx].getTotalDuration() / 60.0 - 0.5);
                 const auto seconds = static_cast<int>(favoritedProfiles[currentProfileIdx].getTotalDuration()) % 60;
@@ -609,25 +846,29 @@ void DefaultUI::setupReactive() {
                 unsigned int stepCount = favoritedProfiles[currentProfileIdx].phases.size();
                 lv_label_set_text_fmt(ui_ProfileScreen_stepsLabel, "%d step%s", stepCount, stepCount > 1 ? "s" : "");
                 lv_label_set_text_fmt(ui_ProfileScreen_phasesLabel, "%d phase%s", phaseCount, phaseCount > 1 ? "s" : "");
-            } else {
-                _ui_flag_modify(ui_ProfileScreen_profileDetails, LV_OBJ_FLAG_HIDDEN, _UI_MODIFY_FLAG_ADD);
-                _ui_flag_modify(ui_ProfileScreen_loadingSpinner, LV_OBJ_FLAG_HIDDEN, _UI_MODIFY_FLAG_REMOVE);
+            }
+
+            if (profileListRows.size() != profileListProfiles.size()) {
+                rebuildProfileList();
+            }
+            if (listLoaded) {
+                updateProfileListSelection(currentProfileSelectorView == ProfileSelectorView::List);
             }
 
             ui_object_set_themeable_style_property(ui_ProfileScreen_previousProfileBtn, LV_PART_MAIN | LV_STATE_DEFAULT,
                                                    LV_STYLE_IMG_RECOLOR,
-                                                   currentProfileIdx > 0 ? _ui_theme_color_NiceWhite : _ui_theme_color_SemiDark);
+                                                   hasPrevious ? _ui_theme_color_NiceWhite : _ui_theme_color_SemiDark);
             ui_object_set_themeable_style_property(ui_ProfileScreen_previousProfileBtn, LV_PART_MAIN | LV_STATE_DEFAULT,
                                                    LV_STYLE_IMG_RECOLOR_OPA,
-                                                   currentProfileIdx > 0 ? _ui_theme_alpha_NiceWhite : _ui_theme_alpha_SemiDark);
+                                                   hasPrevious ? _ui_theme_alpha_NiceWhite : _ui_theme_alpha_SemiDark);
             ui_object_set_themeable_style_property(
                 ui_ProfileScreen_nextProfileBtn, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR,
-                currentProfileIdx < favoritedProfiles.size() - 1 ? _ui_theme_color_NiceWhite : _ui_theme_color_SemiDark);
+                hasNext ? _ui_theme_color_NiceWhite : _ui_theme_color_SemiDark);
             ui_object_set_themeable_style_property(
                 ui_ProfileScreen_nextProfileBtn, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR_OPA,
-                currentProfileIdx < favoritedProfiles.size() - 1 ? _ui_theme_alpha_NiceWhite : _ui_theme_alpha_SemiDark);
+                hasNext ? _ui_theme_alpha_NiceWhite : _ui_theme_alpha_SemiDark);
         },
-        &currentProfileIdx, &profileLoaded);
+        &currentProfileIdx, &profileListCurrentIdx, &profileLoaded, &currentProfileSelectorView);
 
     // Show/hide grind button based on SmartGrind setting or Alt Relay function
     effect_mgr.use_effect([=] { return currentScreen == ui_MenuScreen; },
@@ -662,8 +903,11 @@ void DefaultUI::setupReactive() {
             _ui_flag_modify(ui_BrewScreen_saveButton, LV_OBJ_FLAG_HIDDEN, brewScreenState == BrewScreenState::Settings);
             _ui_flag_modify(ui_BrewScreen_saveAsNewButton, LV_OBJ_FLAG_HIDDEN, brewScreenState == BrewScreenState::Settings);
             _ui_flag_modify(ui_BrewScreen_startButton, LV_OBJ_FLAG_HIDDEN, brewScreenState == BrewScreenState::Brew);
+            _ui_flag_modify(ui_BrewScreen_startTouchArea, LV_OBJ_FLAG_HIDDEN, brewScreenState == BrewScreenState::Brew);
             _ui_flag_modify(ui_BrewScreen_profileInfo, LV_OBJ_FLAG_HIDDEN, brewScreenState == BrewScreenState::Brew);
             _ui_flag_modify(ui_BrewScreen_modeSwitch, LV_OBJ_FLAG_HIDDEN,
+                            brewScreenState == BrewScreenState::Brew && volumetricAvailable);
+            _ui_flag_modify(ui_BrewScreen_modeSwitchTouchArea, LV_OBJ_FLAG_HIDDEN,
                             brewScreenState == BrewScreenState::Brew && volumetricAvailable);
             if (volumetricAvailable) {
                 lv_img_set_src(ui_BrewScreen_volumetricButton, bluetoothScales ? &ui_img_1424216268 : &ui_img_flowmeter_png);

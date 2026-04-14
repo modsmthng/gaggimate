@@ -7,6 +7,7 @@
 #include "../../../plugins/BLEScalePlugin.h"
 #include "ui.h"
 #include <Arduino.h>
+#include <cstdint>
 
 // Flag to track if volumetric hold was triggered
 static bool volumetricHoldTriggered = false;
@@ -91,7 +92,20 @@ void onGrindScreen(lv_event_t *e) {
     controller.setMode(MODE_GRIND);
 }
 
-void onVolumetricClick(lv_event_t *e) {}
+void onVolumetricClick(lv_event_t *e) {
+    if (volumetricHoldTriggered) {
+        volumetricHoldTriggered = false;
+    }
+}
+
+int consumeVolumetricHoldTriggered(void) {
+    if (!volumetricHoldTriggered) {
+        return 0;
+    }
+
+    volumetricHoldTriggered = false;
+    return 1;
+}
 
 void onPreviousProfile(lv_event_t *e) { controller.getUI()->onPreviousProfile(); }
 
@@ -100,6 +114,32 @@ void onNextProfile(lv_event_t *e) { controller.getUI()->onNextProfile(); }
 void onProfileLoad(lv_event_t *e) { controller.getUI()->onProfileSelect(); }
 
 void onProfileSelect(lv_event_t *e) { controller.getUI()->onProfileSwitch(); }
+
+void onProfileScreenBack(lv_event_t *e) { controller.getUI()->onProfileScreenBack(); }
+
+void onProfileSelectorListOpen(lv_event_t *e) { controller.getUI()->onProfileSelectorListOpen(); }
+
+void onProfileGestureMenu(lv_event_t *e) {
+    if (!controller.getUI()->isProfileSelectorListView()) {
+        onMenuClick(e);
+    }
+}
+
+void onProfileGestureNext(lv_event_t *e) {
+    if (!controller.getUI()->isProfileSelectorListView()) {
+        controller.getUI()->onNextProfile();
+    }
+}
+
+void onProfileGesturePrevious(lv_event_t *e) {
+    if (!controller.getUI()->isProfileSelectorListView()) {
+        controller.getUI()->onPreviousProfile();
+    }
+}
+
+void onProfileListEntrySelect(lv_event_t *e) {
+    controller.getUI()->onProfileListEntrySelect(static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e))));
+}
 
 void onFlush(lv_event_t *e) { controller.onFlush(); }
 
@@ -114,6 +154,7 @@ void onProfileScreenLoad(lv_event_t *e) {
     lv_obj_set_ext_click_area(ui_ProfileScreen_nextProfileBtn, 30);
     lv_obj_set_ext_click_area(ui_ProfileScreen_chooseButton, 30);
     lv_obj_set_ext_click_area(ui_ProfileScreen_ImgButton1, 20);
+    lv_obj_set_ext_click_area(ui_ProfileScreen_profileName, 20);
 }
 
 void onMenuScreenLoad(lv_event_t *e) {
@@ -126,7 +167,8 @@ void onMenuScreenLoad(lv_event_t *e) {
 
 void onBrewScreenLoad(lv_event_t *e) {
     lv_obj_set_ext_click_area(ui_BrewScreen_startButton, 25);
-    lv_obj_set_ext_click_area(ui_BrewScreen_profileSelectBtn, 25);
+    lv_obj_set_ext_click_area(ui_BrewScreen_modeSwitch, 20);
+    lv_obj_set_ext_click_area(ui_BrewScreen_profileName, 20);
     lv_obj_set_ext_click_area(ui_BrewScreen_ImgButton5, 20);
     lv_obj_set_ext_click_area(ui_BrewScreen_upDurationButton, 15);
     lv_obj_set_ext_click_area(ui_BrewScreen_downDurationButton, 15);
