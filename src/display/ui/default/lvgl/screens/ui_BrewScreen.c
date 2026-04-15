@@ -354,6 +354,7 @@ void ui_BrewScreen_screen_init(void) {
     lv_obj_set_x(ui_BrewScreen_startButton, 0);
     lv_obj_set_y(ui_BrewScreen_startButton, 105);
     lv_obj_set_align(ui_BrewScreen_startButton, LV_ALIGN_CENTER);
+    lv_obj_add_flag(ui_BrewScreen_startButton, LV_OBJ_FLAG_HIDDEN); /// Flags
     ui_object_set_themeable_style_property(ui_BrewScreen_startButton, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR,
                                            _ui_theme_color_NiceWhite);
     ui_object_set_themeable_style_property(ui_BrewScreen_startButton, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR_OPA,
@@ -671,7 +672,6 @@ void ui_BrewScreen_screen_init(void) {
     lv_obj_set_x(ui_BrewScreen_saveButton, -70);
     lv_obj_set_y(ui_BrewScreen_saveButton, 130);
     lv_obj_set_align(ui_BrewScreen_saveButton, LV_ALIGN_CENTER);
-    lv_obj_add_flag(ui_BrewScreen_saveButton, LV_OBJ_FLAG_HIDDEN); /// Flags
     ui_object_set_themeable_style_property(ui_BrewScreen_saveButton, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR,
                                            _ui_theme_color_NiceWhite);
     ui_object_set_themeable_style_property(ui_BrewScreen_saveButton, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR_OPA,
@@ -684,7 +684,6 @@ void ui_BrewScreen_screen_init(void) {
     lv_obj_set_x(ui_BrewScreen_acceptButton, 0);
     lv_obj_set_y(ui_BrewScreen_acceptButton, 130);
     lv_obj_set_align(ui_BrewScreen_acceptButton, LV_ALIGN_CENTER);
-    lv_obj_add_flag(ui_BrewScreen_acceptButton, LV_OBJ_FLAG_HIDDEN); /// Flags
     ui_object_set_themeable_style_property(ui_BrewScreen_acceptButton, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR,
                                            _ui_theme_color_NiceWhite);
     ui_object_set_themeable_style_property(ui_BrewScreen_acceptButton, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR_OPA,
@@ -697,7 +696,6 @@ void ui_BrewScreen_screen_init(void) {
     lv_obj_set_x(ui_BrewScreen_saveAsNewButton, 70);
     lv_obj_set_y(ui_BrewScreen_saveAsNewButton, 130);
     lv_obj_set_align(ui_BrewScreen_saveAsNewButton, LV_ALIGN_CENTER);
-    lv_obj_add_flag(ui_BrewScreen_saveAsNewButton, LV_OBJ_FLAG_HIDDEN); /// Flags
     ui_object_set_themeable_style_property(ui_BrewScreen_saveAsNewButton, LV_PART_MAIN | LV_STATE_DEFAULT, LV_STYLE_IMG_RECOLOR,
                                            _ui_theme_color_NiceWhite);
     ui_object_set_themeable_style_property(ui_BrewScreen_saveAsNewButton, LV_PART_MAIN | LV_STATE_DEFAULT,
