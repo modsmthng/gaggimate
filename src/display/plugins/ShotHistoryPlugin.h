@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
 #include <display/core/Plugin.h>
+#include <display/core/RecursiveLock.h>
 #include <display/core/utils.h>
 #include <display/models/shot_log_format.h>
 
@@ -12,6 +13,14 @@ constexpr size_t MIN_FREE_SPACE_BYTES = 500 * 1024;         // 500 KB reserved f
 constexpr unsigned long EXTENDED_RECORDING_DURATION = 3000; // 3 seconds
 constexpr unsigned long WEIGHT_STABILIZATION_TIME = 1000;   // 1 second
 constexpr float WEIGHT_STABILIZATION_THRESHOLD = 0.1f;      // 0.1g threshold
+
+struct ShotHistoryRebuildProgress {
+    bool inProgress = false;
+    int total = 0;
+    int current = 0;
+    String status = "";
+    uint32_t version = 0;
+};
 
 class ShotHistoryPlugin : public Plugin {
   public:
@@ -31,8 +40,12 @@ class ShotHistoryPlugin : public Plugin {
     void rebuildIndex();
     void startAsyncRebuild();
     bool ensureIndexExists();
+    ShotHistoryRebuildProgress getRebuildProgressSnapshot();
+    bool readFileBytes(const String &path, std::vector<uint8_t> &out);
 
   private:
+    void setRebuildProgressLocked(const String &status, int total, int current, bool inProgress);
+
     // Index helper functions
     bool readIndexHeader(File &indexFile, ShotIndexHeader &header);
     int findEntryPosition(File &indexFile, const ShotIndexHeader &header, uint32_t shotId);
@@ -86,7 +99,10 @@ class ShotHistoryPlugin : public Plugin {
 
     // Async rebuild state
     bool rebuildInProgress = false;
+    bool rebuildRequested = false;
+    ShotHistoryRebuildProgress rebuildProgress{};
 
+    SemaphoreHandle_t mutex = nullptr;
     xTaskHandle taskHandle;
     void flushBuffer();
     static void loopTask(void *arg);

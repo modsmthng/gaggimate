@@ -72,6 +72,7 @@ ShotHistoryPlugin ShotHistory;
 void ShotHistoryPlugin::setup(Controller *c, PluginManager *pm) {
     controller = c;
     pluginManager = pm;
+    mutex = xSemaphoreCreateRecursiveMutex();
     if (controller->isSDCard()) {
         fs = &SD_MMC;
         ESP_LOGI("ShotHistoryPlugin", "Logging shot history to SD card");
@@ -79,18 +80,34 @@ void ShotHistoryPlugin::setup(Controller *c, PluginManager *pm) {
     pm->on("controller:brew:start", [this](Event const &) { startRecording(); });
     pm->on("controller:brew:end", [this](Event const &) { endRecording(); });
     pm->on("controller:brew:clear", [this](Event const &) { endExtendedRecording(); });
-    pm->on("controller:volumetric-measurement:estimation:change",
-           [this](Event const &event) { currentEstimatedWeight = event.getFloat("value"); });
-    pm->on("controller:volumetric-measurement:bluetooth:change",
-           [this](Event const &event) { currentBluetoothWeight = event.getFloat("value"); });
-    pm->on("boiler:currentTemperature:change", [this](Event const &event) { currentTemperature = event.getFloat("value"); });
-    pm->on("pump:puck-resistance:change", [this](Event const &event) { currentPuckResistance = event.getFloat("value"); });
+    pm->on("controller:volumetric-measurement:estimation:change", [this](Event const &event) {
+        RecursiveLockGuard lock(mutex);
+        currentEstimatedWeight = event.getFloat("value");
+    });
+    pm->on("controller:volumetric-measurement:bluetooth:change", [this](Event const &event) {
+        RecursiveLockGuard lock(mutex);
+        currentBluetoothWeight = event.getFloat("value");
+    });
+    pm->on("boiler:currentTemperature:change", [this](Event const &event) {
+        RecursiveLockGuard lock(mutex);
+        currentTemperature = event.getFloat("value");
+    });
+    pm->on("pump:puck-resistance:change", [this](Event const &event) {
+        RecursiveLockGuard lock(mutex);
+        currentPuckResistance = event.getFloat("value");
+    });
     // Initialize rebuild state
-    rebuildInProgress = false;
+    {
+        RecursiveLockGuard lock(mutex);
+        rebuildInProgress = false;
+        rebuildRequested = false;
+        rebuildProgress = ShotHistoryRebuildProgress{};
+    }
     xTaskCreatePinnedToCore(loopTask, "ShotHistoryPlugin::loop", configMINIMAL_STACK_SIZE * 6, this, 1, &taskHandle, 0);
 }
 
 void ShotHistoryPlugin::record() {
+    RecursiveLockGuard lock(mutex);
     bool shouldRecord = recording || extendedRecording;
 
     if (shouldRecord && (controller->getMode() == MODE_BREW || extendedRecording)) {
@@ -110,7 +127,7 @@ void ShotHistoryPlugin::record() {
                 header.sampleInterval = SHOT_LOG_SAMPLE_INTERVAL_MS;
                 header.fieldsMask = SHOT_LOG_FIELDS_MASK_ALL;
                 header.startEpoch = getTime();
-                Profile profile = controller->getProfileManager()->getSelectedProfile();
+                Profile profile = controller->getProfileManager()->getSelectedProfileSnapshot();
                 strncpy(header.profileId, profile.id.c_str(), sizeof(header.profileId) - 1);
                 header.profileId[sizeof(header.profileId) - 1] = '\0';
                 strncpy(header.profileName, profile.label.c_str(), sizeof(header.profileName) - 1);
@@ -143,12 +160,9 @@ void ShotHistoryPlugin::record() {
 
         // Track phase transitions
         if (controller->getMode() == MODE_BREW) {
-            Process *process = controller->getProcess();
-            if (process != nullptr && process->getType() == MODE_BREW) {
-                auto *brewProcess = static_cast<BrewProcess *>(process);
-                uint8_t currentPhase = static_cast<uint8_t>(brewProcess->phaseIndex);
-
-                // Check for phase transition
+            ProcessSnapshot snapshot = controller->getProcessSnapshot(false);
+            if (snapshot.available && snapshot.isBrew) {
+                uint8_t currentPhase = static_cast<uint8_t>(snapshot.phaseIndex);
                 if (currentPhase != lastRecordedPhase) {
                     recordPhaseTransition(currentPhase, sampleCount);
                     lastRecordedPhase = currentPhase;
@@ -253,12 +267,10 @@ void ShotHistoryPlugin::record() {
 }
 
 void ShotHistoryPlugin::startRecording() {
-    Process *process = controller->getProcess();
-    if (process != nullptr && process->getType() == MODE_BREW) {
-        BrewProcess *brewProcess = static_cast<BrewProcess *>(process);
-        if (brewProcess->isUtility()) {
-            return;
-        }
+    RecursiveLockGuard lock(mutex);
+    ProcessSnapshot snapshot = controller->getProcessSnapshot(false);
+    if (snapshot.available && snapshot.isBrew && snapshot.utility) {
+        return;
     }
     currentId = padId(String(controller->getSettings().getHistoryIndex()));
     shotStart = millis();
@@ -268,7 +280,7 @@ void ShotHistoryPlugin::startRecording() {
     lastStableWeight = 0.0f;
     currentEstimatedWeight = 0.0f;
     currentBluetoothFlow = 0.0f;
-    currentProfileName = controller->getProfileManager()->getSelectedProfile().label;
+    currentProfileName = controller->getProfileManager()->getSelectedProfileSnapshot().label;
     recording = true;
     extendedRecording = false;
     indexEntryCreated = false; // Reset flag for new shot
@@ -289,6 +301,7 @@ unsigned long ShotHistoryPlugin::getTime() {
 }
 
 void ShotHistoryPlugin::endRecording() {
+    RecursiveLockGuard lock(mutex);
     if (recording && controller && controller->isVolumetricAvailable() && currentBluetoothWeight > 0) {
         // Start extended recording for any shot with active weight data
         extendedRecording = true;
@@ -301,6 +314,7 @@ void ShotHistoryPlugin::endRecording() {
 }
 
 void ShotHistoryPlugin::endExtendedRecording() {
+    RecursiveLockGuard lock(mutex);
     if (extendedRecording) {
         extendedRecording = false;
     }
@@ -313,7 +327,7 @@ void ShotHistoryPlugin::recordPhaseTransition(uint8_t phaseNumber, uint16_t samp
     }
 
     // Get current profile to extract phase name
-    Profile profile = controller->getProfileManager()->getSelectedProfile();
+    Profile profile = controller->getProfileManager()->getSelectedProfileSnapshot();
     PhaseTransition &transition = header.phaseTransitions[header.phaseTransitionCount];
 
     transition.sampleIndex = sampleIndex;
@@ -345,11 +359,10 @@ uint16_t ShotHistoryPlugin::getSystemInfo() {
 
     // Bit 1: Currently in volumetric mode (check current process if active)
     if (controller != nullptr) {
-        Process *process = controller->getProcess();
-        if (process != nullptr && process->getType() == MODE_BREW) {
-            auto *brewProcess = static_cast<BrewProcess *>(process);
-            bool currentlyVolumetric = brewProcess->target == ProcessTarget::VOLUMETRIC &&
-                                       brewProcess->currentPhase.hasVolumetricTarget() && controller->isVolumetricAvailable();
+        ProcessSnapshot snapshot = controller->getProcessSnapshot(false);
+        if (snapshot.available && snapshot.isBrew) {
+            bool currentlyVolumetric =
+                snapshot.target == ProcessTarget::VOLUMETRIC && snapshot.phase.hasVolumetricTarget() && controller->isVolumetricAvailable();
             if (currentlyVolumetric) {
                 systemInfo |= SYSTEM_INFO_CURRENTLY_VOLUMETRIC;
             }
@@ -375,6 +388,7 @@ uint16_t ShotHistoryPlugin::getSystemInfo() {
 }
 
 void ShotHistoryPlugin::cleanupHistory() {
+    RecursiveLockGuard lock(mutex);
     size_t freeSpace = getFreeSpace();
     if (freeSpace > MIN_FREE_SPACE_BYTES) {
         return; // Enough space, nothing to do
@@ -435,6 +449,7 @@ size_t ShotHistoryPlugin::getFreeSpace() {
 }
 
 void ShotHistoryPlugin::handleRequest(JsonDocument &request, JsonDocument &response) {
+    RecursiveLockGuard lock(mutex);
     String type = request["tp"].as<String>();
     response["tp"] = String("res:") + type.substring(4);
     response["rid"] = request["rid"].as<String>();
@@ -526,6 +541,7 @@ void ShotHistoryPlugin::handleRequest(JsonDocument &request, JsonDocument &respo
 }
 
 void ShotHistoryPlugin::saveNotes(const String &id, const JsonDocument &notes) {
+    RecursiveLockGuard lock(mutex);
     File file = fs->open("/h/" + id + ".json", FILE_WRITE);
     if (file) {
         String notesStr;
@@ -536,6 +552,7 @@ void ShotHistoryPlugin::saveNotes(const String &id, const JsonDocument &notes) {
 }
 
 void ShotHistoryPlugin::loadNotes(const String &id, JsonDocument &notes) {
+    RecursiveLockGuard lock(mutex);
     File file = fs->open("/h/" + id + ".json", "r");
     if (file) {
         String notesStr = file.readString();
@@ -548,6 +565,17 @@ void ShotHistoryPlugin::loopTask(void *arg) {
     auto *plugin = static_cast<ShotHistoryPlugin *>(arg);
     while (true) {
         plugin->record();
+        bool shouldRebuild = false;
+        {
+            RecursiveLockGuard lock(plugin->mutex);
+            shouldRebuild = plugin->rebuildRequested && !plugin->recording && !plugin->extendedRecording && !plugin->isFileOpen;
+            if (shouldRebuild) {
+                plugin->rebuildRequested = false;
+            }
+        }
+        if (shouldRebuild) {
+            plugin->rebuildIndex();
+        }
         // Use canonical interval from shot log format to avoid divergence.
         vTaskDelay(SHOT_LOG_SAMPLE_INTERVAL_MS / portTICK_PERIOD_MS);
     }
@@ -562,6 +590,7 @@ void ShotHistoryPlugin::flushBuffer() {
 
 // Index management methods
 bool ShotHistoryPlugin::ensureIndexExists() {
+    RecursiveLockGuard lock(mutex);
     if (fs->exists("/h/index.bin")) {
         // Validate existing index header
         File indexFile = fs->open("/h/index.bin", "r");
@@ -600,6 +629,7 @@ bool ShotHistoryPlugin::ensureIndexExists() {
 }
 
 bool ShotHistoryPlugin::appendToIndex(const ShotIndexEntry &entry) {
+    RecursiveLockGuard lock(mutex);
     if (!ensureIndexExists()) {
         return false;
     }
@@ -650,6 +680,7 @@ bool ShotHistoryPlugin::appendToIndex(const ShotIndexEntry &entry) {
 }
 
 void ShotHistoryPlugin::updateIndexMetadata(uint32_t shotId, uint8_t rating, uint16_t volume) {
+    RecursiveLockGuard lock(mutex);
     File indexFile = fs->open("/h/index.bin", "r+");
     if (!indexFile) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to open index file for metadata update");
@@ -686,6 +717,7 @@ void ShotHistoryPlugin::updateIndexMetadata(uint32_t shotId, uint8_t rating, uin
 }
 
 void ShotHistoryPlugin::markIndexDeleted(uint32_t shotId) {
+    RecursiveLockGuard lock(mutex);
     File indexFile = fs->open("/h/index.bin", "r+");
     if (!indexFile) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to open index file for deletion marking");
@@ -728,42 +760,21 @@ void ShotHistoryPlugin::markIndexDeleted(uint32_t shotId) {
 }
 
 void ShotHistoryPlugin::startAsyncRebuild() {
-    if (!rebuildInProgress) {
-        rebuildInProgress = true; // Set immediately to prevent multiple rebuilds
-        ESP_LOGI("ShotHistoryPlugin", "Starting immediate async rebuild task");
-
-        // Create a dedicated task for rebuild instead of using the existing loop
-        xTaskCreatePinnedToCore(
-            [](void *param) {
-                auto *plugin = static_cast<ShotHistoryPlugin *>(param);
-                ESP_LOGI("ShotHistoryPlugin", "Rebuild task started");
-                plugin->rebuildIndex();
-                plugin->rebuildInProgress = false;
-                ESP_LOGI("ShotHistoryPlugin", "Rebuild task completed");
-                vTaskDelete(NULL); // Delete this task when done
-            },
-            "ShotHistoryRebuild",
-            configMINIMAL_STACK_SIZE * 8, // Larger stack for file operations
-            this,
-            2, // Higher priority than normal
-            NULL, 0);
-    } else {
+    RecursiveLockGuard lock(mutex);
+    if (rebuildInProgress || rebuildRequested) {
         ESP_LOGW("ShotHistoryPlugin", "Rebuild already in progress, ignoring request");
+        return;
     }
+    rebuildRequested = true;
+    rebuildInProgress = true;
+    setRebuildProgressLocked("queued", 0, 0, true);
+    ESP_LOGI("ShotHistoryPlugin", "Queued async rebuild for ShotHistory loop task");
 }
 
 void ShotHistoryPlugin::rebuildIndex() {
+    RecursiveLockGuard lock(mutex);
     ESP_LOGI("ShotHistoryPlugin", "Starting index rebuild...");
-
-    // Send scanning event
-    if (pluginManager) {
-        Event startEvent;
-        startEvent.id = "evt:history-rebuild-progress";
-        startEvent.setInt("total", 0);
-        startEvent.setInt("current", 0);
-        startEvent.setString("status", "scanning");
-        pluginManager->trigger(startEvent);
-    }
+    setRebuildProgressLocked("scanning", 0, 0, true);
 
     // Delete existing index
     fs->remove("/h/index.bin");
@@ -771,30 +782,16 @@ void ShotHistoryPlugin::rebuildIndex() {
     // Create new empty index
     if (!ensureIndexExists()) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to create index during rebuild");
-        // Emit error event
-        if (pluginManager) {
-            Event errorEvent;
-            errorEvent.id = "evt:history-rebuild-progress";
-            errorEvent.setInt("total", 0);
-            errorEvent.setInt("current", 0);
-            errorEvent.setString("status", "error");
-            pluginManager->trigger(errorEvent);
-        }
+        setRebuildProgressLocked("error", 0, 0, false);
+        rebuildInProgress = false;
         return;
     }
 
     File directory = fs->open("/h");
     if (!directory || !directory.isDirectory()) {
         ESP_LOGW("ShotHistoryPlugin", "No history directory found");
-        // Emit completion event even if no directory exists
-        if (pluginManager) {
-            Event completedEvent;
-            completedEvent.id = "evt:history-rebuild-progress";
-            completedEvent.setInt("total", 0);
-            completedEvent.setInt("current", 0);
-            completedEvent.setString("status", "completed");
-            pluginManager->trigger(completedEvent);
-        }
+        setRebuildProgressLocked("completed", 0, 0, false);
+        rebuildInProgress = false;
         return;
     }
 
@@ -815,15 +812,7 @@ void ShotHistoryPlugin::rebuildIndex() {
 
     ESP_LOGI("ShotHistoryPlugin", "Rebuilding index from %d shot files", slogFiles.size());
 
-    // Emit start event with total file count
-    if (pluginManager) {
-        Event startEvent;
-        startEvent.id = "evt:history-rebuild-progress";
-        startEvent.setInt("total", (int)slogFiles.size());
-        startEvent.setInt("current", 0);
-        startEvent.setString("status", "started");
-        pluginManager->trigger(startEvent);
-    }
+    setRebuildProgressLocked("started", static_cast<int>(slogFiles.size()), 0, true);
 
     int currentIndex = 0;
     for (const String &fileName : slogFiles) {
@@ -894,16 +883,9 @@ void ShotHistoryPlugin::rebuildIndex() {
         // Append to index
         appendToIndex(entry);
 
-        // Emit progress update with adaptive frequency
-        // Update every file for small rebuilds, every few files for larger ones
         int updateFrequency = slogFiles.size() <= 20 ? 1 : (slogFiles.size() <= 100 ? 3 : 5);
-        if (pluginManager && (currentIndex % updateFrequency == 0 || currentIndex == slogFiles.size())) {
-            Event progressEvent;
-            progressEvent.id = "evt:history-rebuild-progress";
-            progressEvent.setInt("total", (int)slogFiles.size());
-            progressEvent.setInt("current", currentIndex);
-            progressEvent.setString("status", "processing");
-            pluginManager->trigger(progressEvent);
+        if (currentIndex % updateFrequency == 0 || currentIndex == slogFiles.size()) {
+            setRebuildProgressLocked("processing", static_cast<int>(slogFiles.size()), currentIndex, true);
             ESP_LOGI("ShotHistoryPlugin", "Rebuild progress: %d/%d", currentIndex, (int)slogFiles.size());
 
             // Small delay to allow UI updates and prevent overwhelming the system
@@ -911,16 +893,8 @@ void ShotHistoryPlugin::rebuildIndex() {
         }
     }
 
-    // Emit completion event
-    if (pluginManager) {
-        Event completionEvent;
-        completionEvent.id = "evt:history-rebuild-progress";
-        completionEvent.setInt("total", (int)slogFiles.size());
-        completionEvent.setInt("current", (int)slogFiles.size());
-        completionEvent.setString("status", "completed");
-        pluginManager->trigger(completionEvent);
-    }
-
+    setRebuildProgressLocked("completed", static_cast<int>(slogFiles.size()), static_cast<int>(slogFiles.size()), false);
+    rebuildInProgress = false;
     ESP_LOGI("ShotHistoryPlugin", "Index rebuild completed");
 }
 
@@ -974,7 +948,8 @@ bool ShotHistoryPlugin::writeEntryAtPosition(File &indexFile, size_t position, c
 }
 
 bool ShotHistoryPlugin::createEarlyIndexEntry() {
-    Profile profile = controller->getProfileManager()->getSelectedProfile();
+    RecursiveLockGuard lock(mutex);
+    Profile profile = controller->getProfileManager()->getSelectedProfileSnapshot();
 
     ShotIndexEntry indexEntry{};
     indexEntry.id = currentId.toInt();
@@ -995,4 +970,31 @@ bool ShotHistoryPlugin::createEarlyIndexEntry() {
         ESP_LOGE("ShotHistoryPlugin", "Failed to create early index entry for shot %u", indexEntry.id);
     }
     return success;
+}
+
+ShotHistoryRebuildProgress ShotHistoryPlugin::getRebuildProgressSnapshot() {
+    RecursiveLockGuard lock(mutex);
+    return rebuildProgress;
+}
+
+bool ShotHistoryPlugin::readFileBytes(const String &path, std::vector<uint8_t> &out) {
+    RecursiveLockGuard lock(mutex);
+    File file = fs->open(path, "r");
+    if (!file) {
+        return false;
+    }
+
+    size_t size = file.size();
+    out.resize(size);
+    size_t bytesRead = file.read(out.data(), size);
+    file.close();
+    return bytesRead == size;
+}
+
+void ShotHistoryPlugin::setRebuildProgressLocked(const String &status, int total, int current, bool inProgress) {
+    rebuildProgress.status = status;
+    rebuildProgress.total = total;
+    rebuildProgress.current = current;
+    rebuildProgress.inProgress = inProgress;
+    rebuildProgress.version++;
 }
