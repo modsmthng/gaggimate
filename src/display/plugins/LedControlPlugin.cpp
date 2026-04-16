@@ -18,7 +18,7 @@ void LedControlPlugin::loop() {
 }
 
 void LedControlPlugin::updateControl() {
-    Settings settings = this->controller->getSettings();
+    Settings &settings = this->controller->getSettings();
     int mode = this->controller->getMode();
     if (mode == MODE_STANDBY) {
         sendControl(0, 0, 0, 0, 0);
@@ -28,8 +28,8 @@ void LedControlPlugin::updateControl() {
         sendControl(0, 0, 255, 20, settings.getSunriseExtBrightness());
         return;
     }
-    if (this->controller->getLastProcess() != nullptr && this->controller->getLastProcess()->getType() == MODE_BREW &&
-        mode == MODE_BREW) {
+    ProcessSnapshot snapshot = this->controller->getProcessSnapshot();
+    if (snapshot.available && !snapshot.current && snapshot.isBrew && mode == MODE_BREW) {
         sendControl(0, 255, 0, 20, settings.getSunriseExtBrightness());
         return;
     }

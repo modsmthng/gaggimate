@@ -148,9 +148,8 @@ void DefaultUI::init() {
     pluginManager->on("controller:brew:start",
                       [this](Event const &event) { changeScreen(&ui_StatusScreen, &ui_StatusScreen_screen_init); });
     pluginManager->on("controller:brew:clear", [this](Event const &event) {
-        if (lv_scr_act() == ui_StatusScreen) {
-            changeScreen(&ui_BrewScreen, &ui_BrewScreen_screen_init);
-        }
+        pendingBrewClear = true;
+        rerender = true;
     });
     pluginManager->on("controller:bluetooth:waiting", [this](Event const &) {
         waitingForController = true;
@@ -160,15 +159,8 @@ void DefaultUI::init() {
         waitingForController = false;
         rerender = true;
         initialized = true;
-        if (lv_scr_act() == ui_StandbyScreen) {
-            Settings &settings = controller->getSettings();
-            if (settings.getStartupMode() == MODE_BREW) {
-                changeScreen(&ui_BrewScreen, &ui_BrewScreen_screen_init);
-            } else {
-                standbyEnterTime = millis();
-            }
-        }
         pressureAvailable = controller->getSystemInfo().capabilities.pressure;
+        pendingControllerConnect = true;
     });
     pluginManager->on("controller:bluetooth:disconnect", [this](Event const &) {
         waitingForController = true;
@@ -202,11 +194,7 @@ void DefaultUI::init() {
                       [this](Event const &) { changeScreen(&ui_StandbyScreen, &ui_StandbyScreen_screen_init); });
 
     pluginManager->on("profiles:profile:select", [this](Event const &event) {
-        profileManager->loadSelectedProfile(selectedProfile);
         selectedProfileId = event.getString("id");
-        targetDuration = profileManager->getSelectedProfile().getTotalDuration();
-        targetVolume = profileManager->getSelectedProfile().getTotalVolume();
-        profileVolumetric = profileManager->getSelectedProfile().isVolumetric();
         reloadProfiles();
         rerender = true;
     });
@@ -223,13 +211,32 @@ void DefaultUI::init() {
     setupState();
     setupReactive();
     xTaskCreatePinnedToCore(loopTask, "DefaultUI::loop", configMINIMAL_STACK_SIZE * 6, this, 1, &taskHandle, 1);
-    xTaskCreatePinnedToCore(profileLoopTask, "DefaultUI::loopProfiles", configMINIMAL_STACK_SIZE * 4, this, 1, &profileTaskHandle,
-                            0);
 }
 
 void DefaultUI::loop() {
     const unsigned long now = millis();
     const unsigned long diff = now - lastRender;
+
+    loadProfilesIfNeeded();
+
+    if (pendingControllerConnect) {
+        pendingControllerConnect = false;
+        if (currentScreen == ui_StandbyScreen || targetScreen == &ui_StandbyScreen) {
+            Settings &settings = controller->getSettings();
+            if (settings.getStartupMode() == MODE_BREW) {
+                changeScreen(&ui_BrewScreen, &ui_BrewScreen_screen_init);
+            } else {
+                standbyEnterTime = millis();
+            }
+        }
+    }
+
+    if (pendingBrewClear) {
+        pendingBrewClear = false;
+        if (currentScreen == ui_StatusScreen || targetScreen == &ui_StatusScreen) {
+            changeScreen(&ui_BrewScreen, &ui_BrewScreen_screen_init);
+        }
+    }
 
     if (now - lastTempLog > TEMP_HISTORY_INTERVAL) {
         updateTempHistory();
@@ -271,13 +278,19 @@ void DefaultUI::loop() {
     lv_task_handler();
 }
 
-void DefaultUI::loopProfiles() {
+void DefaultUI::loadProfilesIfNeeded() {
     if (!profileLoaded) {
         const auto favoritedIds = profileManager->getFavoritedProfiles();
         favoritedProfileIds.clear();
         favoritedProfiles.clear();
         favoritedProfileIds.reserve(favoritedIds.size() + 1);
-        favoritedProfileIds.emplace_back(controller->getSettings().getSelectedProfile());
+        Profile currentProfile = profileManager->getSelectedProfileSnapshot();
+        selectedProfile = currentProfile;
+        selectedProfileId = currentProfile.id;
+        targetDuration = currentProfile.getTotalDuration();
+        targetVolume = currentProfile.getTotalVolume();
+        profileVolumetric = currentProfile.isVolumetric();
+        favoritedProfileIds.emplace_back(currentProfile.id);
         for (const auto &id : favoritedIds) {
             if (std::find(favoritedProfileIds.begin(), favoritedProfileIds.end(), id) == favoritedProfileIds.end())
                 favoritedProfileIds.emplace_back(id);
@@ -288,6 +301,7 @@ void DefaultUI::loopProfiles() {
             profileManager->loadProfile(profileId, profile);
             favoritedProfiles.emplace_back(std::move(profile));
         }
+        currentProfileIdx = 0;
         profileLoaded = 1;
     }
 }
@@ -312,7 +326,7 @@ void DefaultUI::onProfileSwitch() {
 }
 
 void DefaultUI::onNextProfile() {
-    if (currentProfileIdx < favoritedProfileIds.size() - 1) {
+    if (!favoritedProfileIds.empty() && currentProfileIdx < static_cast<int>(favoritedProfileIds.size()) - 1) {
         currentProfileIdx++;
     }
     rerender = true;
@@ -326,6 +340,9 @@ void DefaultUI::onPreviousProfile() {
 }
 
 void DefaultUI::onProfileSelect() {
+    if (favoritedProfileIds.empty() || currentProfileIdx >= static_cast<int>(favoritedProfileIds.size())) {
+        return;
+    }
     profileManager->selectProfile(favoritedProfileIds[currentProfileIdx]);
     profileDirty = false;
     changeScreen(&ui_BrewScreen, ui_BrewScreen_screen_init);
@@ -333,8 +350,9 @@ void DefaultUI::onProfileSelect() {
 
 void DefaultUI::onVolumetricDelete() {
     controller->onVolumetricDelete();
-    profileVolumetric = profileManager->getSelectedProfile().isVolumetric();
+    reloadProfiles();
     profileDirty = true;
+    rerender = true;
 }
 
 void DefaultUI::setupPanel() {
@@ -360,14 +378,13 @@ void DefaultUI::setupState() {
     mode = controller->getMode();
     currentTemp = static_cast<int>(controller->getCurrentTemp());
     targetTemp = static_cast<int>(controller->getTargetTemp());
-    targetDuration = profileManager->getSelectedProfile().getTotalDuration();
-    targetVolume = profileManager->getSelectedProfile().getTotalVolume();
+    selectedProfile = profileManager->getSelectedProfileSnapshot();
+    targetDuration = selectedProfile.getTotalDuration();
+    targetVolume = selectedProfile.getTotalVolume();
     grindDuration = settings.getTargetGrindDuration();
     grindVolume = settings.getTargetGrindVolume();
     pressureAvailable = controller->getSystemInfo().capabilities.pressure ? 1 : 0;
     pressureScaling = std::ceil(settings.getPressureScaling());
-    selectedProfileId = settings.getSelectedProfile();
-    profileManager->loadSelectedProfile(selectedProfile);
     profileVolumetric = selectedProfile.isVolumetric();
 }
 
@@ -742,66 +759,30 @@ void DefaultUI::updateStandbyScreen() {
 }
 
 void DefaultUI::updateStatusScreen() const {
-    // Copy process pointers to avoid race conditions with controller thread
-    Process *process = controller->getProcess();
-    Process *lastProcess = controller->getLastProcess();
-
-    if (process == nullptr) {
-        process = lastProcess;
-    }
-    if (process == nullptr || process->getType() != MODE_BREW) {
+    ProcessSnapshot snapshot = controller->getProcessSnapshot();
+    if (!snapshot.available || !snapshot.isBrew || snapshot.profile.phases.empty() ||
+        snapshot.phaseIndex >= snapshot.profile.phases.size()) {
         return;
     }
 
-    // Additional safety: Validate that the process pointer is still valid
-    // by checking if it matches either current or last process
-    if (process != controller->getProcess() && process != controller->getLastProcess()) {
-        ESP_LOGW("DefaultUI", "Process pointer became invalid during access, skipping update");
-        return;
-    }
-
-    auto *brewProcess = static_cast<BrewProcess *>(process);
-    if (brewProcess == nullptr) {
-        ESP_LOGE("DefaultUI", "brewProcess is null after cast");
-        return;
-    }
-
-    // Validate the brewProcess object before accessing its members
-    // Check if the object is in a reasonable state by validating key fields
-    if (brewProcess->profile.phases.empty() || brewProcess->phaseIndex >= brewProcess->profile.phases.size()) {
-        ESP_LOGE("DefaultUI", "brewProcess phaseIndex out of bounds: %u >= %zu", brewProcess->phaseIndex,
-                 brewProcess->profile.phases.size());
-        return;
-    }
-
-    // Final safety check before accessing brewProcess members
-    if (!brewProcess) {
-        ESP_LOGE("DefaultUI", "brewProcess became null after validation");
-        return;
-    }
-
-    const auto phase = brewProcess->currentPhase;
+    const auto &phase = snapshot.phase;
 
     unsigned long now = millis();
-    if (!process->isActive()) {
-        // Add bounds check for finished timestamp
-        if (brewProcess && brewProcess->finished > 0) {
-            now = brewProcess->finished;
-        }
+    if (!snapshot.active && snapshot.finished > 0) {
+        now = snapshot.finished;
     }
 
     lv_label_set_text(ui_StatusScreen_stepLabel, phase.phase == PhaseType::PHASE_TYPE_BREW ? "BREW" : "INFUSION");
     String phaseText = "Finished";
-    if (process->isActive()) {
+    if (snapshot.active) {
         phaseText = phase.name;
-    } else if (controller->getSettings().isDelayAdjust() && !process->isComplete()) {
+    } else if (controller->getSettings().isDelayAdjust() && !snapshot.complete) {
         phaseText = "Calibrating...";
     }
     lv_label_set_text(ui_StatusScreen_phaseLabel, phaseText.c_str());
 
-    // Add bounds check for processStarted timestamp
-    if (brewProcess && brewProcess->processStarted > 0 && now >= brewProcess->processStarted) {
-        const unsigned long processDuration = now - brewProcess->processStarted;
+    if (snapshot.processStarted > 0 && now >= snapshot.processStarted) {
+        const unsigned long processDuration = now - snapshot.processStarted;
         const double processSecondsDouble = processDuration / 1000.0;
         const auto processMinutes = static_cast<int>(processSecondsDouble / 60.0);
         const auto processSeconds = static_cast<int>(processSecondsDouble) % 60;
@@ -810,18 +791,17 @@ void DefaultUI::updateStatusScreen() const {
         lv_label_set_text_fmt(ui_StatusScreen_currentDuration, "00:00");
     }
 
-    if (brewProcess && brewProcess->target == ProcessTarget::VOLUMETRIC && phase.hasVolumetricTarget()) {
+    if (snapshot.target == ProcessTarget::VOLUMETRIC && phase.hasVolumetricTarget()) {
         Target target = phase.getVolumetricTarget();
-        lv_bar_set_value(ui_StatusScreen_brewBar, brewProcess->currentVolume * 10.0, LV_ANIM_OFF);
+        lv_bar_set_value(ui_StatusScreen_brewBar, snapshot.currentVolume * 10.0, LV_ANIM_OFF);
         lv_bar_set_range(ui_StatusScreen_brewBar, 0, target.value * 10.0 + 1.0);
-        lv_label_set_text_fmt(ui_StatusScreen_brewLabel, "%.1f / %.1fg", brewProcess->currentVolume, target.value);
-    } else if (brewProcess) {
-        // Add bounds check for currentPhaseStarted timestamp
-        if (brewProcess->currentPhaseStarted > 0 && now >= brewProcess->currentPhaseStarted) {
-            const unsigned long progress = now - brewProcess->currentPhaseStarted;
+        lv_label_set_text_fmt(ui_StatusScreen_brewLabel, "%.1f / %.1fg", snapshot.currentVolume, target.value);
+    } else {
+        if (snapshot.currentPhaseStarted > 0 && now >= snapshot.currentPhaseStarted) {
+            const unsigned long progress = now - snapshot.currentPhaseStarted;
             lv_bar_set_value(ui_StatusScreen_brewBar, progress, LV_ANIM_OFF);
-            lv_bar_set_range(ui_StatusScreen_brewBar, 0, std::max(static_cast<int>(brewProcess->getPhaseDuration()), 1));
-            lv_label_set_text_fmt(ui_StatusScreen_brewLabel, "%d / %ds", progress / 1000, brewProcess->getPhaseDuration() / 1000);
+            lv_bar_set_range(ui_StatusScreen_brewBar, 0, std::max(static_cast<int>(snapshot.phaseDuration), 1));
+            lv_label_set_text_fmt(ui_StatusScreen_brewLabel, "%d / %ds", progress / 1000, snapshot.phaseDuration / 1000);
         } else {
             lv_bar_set_value(ui_StatusScreen_brewBar, 0, LV_ANIM_OFF);
             lv_bar_set_range(ui_StatusScreen_brewBar, 0, 1);
@@ -829,22 +809,19 @@ void DefaultUI::updateStatusScreen() const {
         }
     }
 
-    if (brewProcess && brewProcess->target == ProcessTarget::TIME) {
-        const unsigned long targetDuration = brewProcess->getTotalDuration();
+    if (snapshot.target == ProcessTarget::TIME) {
+        const unsigned long targetDuration = snapshot.totalDuration;
         const double targetSecondsDouble = targetDuration / 1000.0;
         const auto targetMinutes = static_cast<int>(targetSecondsDouble / 60.0);
         const auto targetSeconds = static_cast<int>(targetSecondsDouble) % 60;
         lv_label_set_text_fmt(ui_StatusScreen_targetDuration, "%2d:%02d", targetMinutes, targetSeconds);
-    } else if (brewProcess) {
-        lv_label_set_text_fmt(ui_StatusScreen_targetDuration, "%.1fg", brewProcess->getBrewVolume());
+    } else {
+        lv_label_set_text_fmt(ui_StatusScreen_targetDuration, "%.1fg", snapshot.brewVolume);
     }
-    if (brewProcess) {
-        lv_img_set_src(ui_StatusScreen_Image8,
-                       brewProcess->target == ProcessTarget::TIME ? &ui_img_360122106 : &ui_img_1424216268);
-    }
+    lv_img_set_src(ui_StatusScreen_Image8, snapshot.target == ProcessTarget::TIME ? &ui_img_360122106 : &ui_img_1424216268);
 
-    if (brewProcess && brewProcess->isAdvancedPump()) {
-        float pressure = brewProcess->getPumpPressure();
+    if (snapshot.advancedPump) {
+        float pressure = snapshot.pumpPressure;
         const double percentage = 1.0 - static_cast<double>(pressure) / static_cast<double>(pressureScaling);
         adjustTarget(uic_StatusScreen_dials_pressureTarget, percentage, -62.0, 124.0);
     } else {
@@ -852,19 +829,15 @@ void DefaultUI::updateStatusScreen() const {
         adjustTarget(uic_StatusScreen_dials_pressureTarget, percentage, -62.0, 124.0);
     }
 
-    // Brew finished adjustments
-    if (process->isActive()) {
+    if (snapshot.active) {
         lv_obj_add_flag(ui_StatusScreen_brewVolume, LV_OBJ_FLAG_HIDDEN);
     } else {
-        // Re-validate brewProcess pointer before accessing members
-        if (brewProcess && brewProcess->target == ProcessTarget::VOLUMETRIC) {
+        if (snapshot.target == ProcessTarget::VOLUMETRIC) {
             lv_obj_clear_flag(ui_StatusScreen_brewVolume, LV_OBJ_FLAG_HIDDEN);
         }
         lv_obj_add_flag(ui_StatusScreen_barContainer, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(ui_StatusScreen_labelContainer, LV_OBJ_FLAG_HIDDEN);
-        if (brewProcess) {
-            lv_label_set_text_fmt(ui_StatusScreen_brewVolume, "%.1lfg", brewProcess->currentVolume);
-        }
+        lv_label_set_text_fmt(ui_StatusScreen_brewVolume, "%.1lfg", snapshot.currentVolume);
         lv_imgbtn_set_src(ui_StatusScreen_pauseButton, LV_IMGBTN_STATE_RELEASED, nullptr, &ui_img_631115820, nullptr);
     }
 }
@@ -921,14 +894,6 @@ void DefaultUI::loopTask(void *arg) {
     auto *ui = static_cast<DefaultUI *>(arg);
     while (true) {
         ui->loop();
-        vTaskDelay(25 / portTICK_PERIOD_MS);
-    }
-}
-
-void DefaultUI::profileLoopTask(void *arg) {
-    auto *ui = static_cast<DefaultUI *>(arg);
-    while (true) {
-        ui->loopProfiles();
         vTaskDelay(25 / portTICK_PERIOD_MS);
     }
 }

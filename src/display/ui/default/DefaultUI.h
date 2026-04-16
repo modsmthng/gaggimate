@@ -28,7 +28,6 @@ class DefaultUI {
     // Default work methods
     void init();
     void loop();
-    void loopProfiles();
 
     // Interface methods
     void changeScreen(lv_obj_t **screen, void (*target_init)(void));
@@ -61,6 +60,7 @@ class DefaultUI {
 
     void updateStandbyScreen();
     void updateStatusScreen() const;
+    void loadProfilesIfNeeded();
 
     void adjustDials(lv_obj_t *dials);
     void adjustTempTarget(lv_obj_t *dials);
@@ -124,7 +124,7 @@ class DefaultUI {
     BrewScreenState brewScreenState = BrewScreenState::Brew;
 
     int profileDirty = 0;
-    int currentProfileIdx;
+    int currentProfileIdx = 0;
     int profileLoaded = 0;
     std::vector<String> favoritedProfileIds;
     std::vector<Profile> favoritedProfiles;
@@ -134,14 +134,14 @@ class DefaultUI {
     lv_obj_t **targetScreen = &ui_StandbyScreen;
     lv_obj_t *currentScreen = ui_StandbyScreen;
     void (*targetScreenInit)(void) = &ui_StandbyScreen_screen_init;
+    bool pendingControllerConnect = false;
+    bool pendingBrewClear = false;
 
     // Standby brightness control
     unsigned long standbyEnterTime = 0;
 
     xTaskHandle taskHandle;
     static void loopTask(void *arg);
-    xTaskHandle profileTaskHandle;
-    static void profileLoopTask(void *arg);
 };
 
 #endif // DEFAULTUI_H
