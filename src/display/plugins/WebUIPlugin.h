@@ -9,6 +9,8 @@
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include <display/core/Plugin.h>
+#include <display/core/RecursiveLock.h>
+#include <deque>
 
 constexpr size_t UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 constexpr size_t CLEANUP_PERIOD = 5 * 1000;
@@ -19,6 +21,17 @@ const String LOCAL_URL = "http://4.4.4.1/";
 const String RELEASE_URL = "https://github.com/jniebuhr/gaggimate/releases/";
 
 class ProfileManager;
+
+struct WebSocketInboundMessage {
+    uint32_t clientId = 0;
+    String payload = "";
+};
+
+struct WebSocketOutboundMessage {
+    bool broadcast = false;
+    uint32_t clientId = 0;
+    String payload = "";
+};
 
 class WebUIPlugin : public Plugin {
   public:
@@ -39,9 +52,15 @@ class WebUIPlugin : public Plugin {
     void handleAutotuneStart(uint32_t clientId, JsonDocument &request);
     void handleProfileRequest(uint32_t clientId, JsonDocument &request);
     void handleFlushStart(uint32_t clientId, JsonDocument &request);
+    void handleWebSocketRequest(const WebSocketInboundMessage &message);
+    void enqueueOutboundMessage(const String &payload, bool broadcast, uint32_t clientId = 0);
+    void processInboundMessages();
+    void processOutboundMessages();
+    void handleDeferredActions();
 
     // HTTP handlers
-    void handleSettings(AsyncWebServerRequest *request) const;
+    void handleSettings(AsyncWebServerRequest *request);
+    void handleHistoryFileDownload(AsyncWebServerRequest *request);
     void handleBLEScaleList(AsyncWebServerRequest *request);
     void handleBLEScaleScan(AsyncWebServerRequest *request);
     void handleBLEScaleConnect(AsyncWebServerRequest *request);
@@ -70,6 +89,12 @@ class WebUIPlugin : public Plugin {
     bool serverRunning = false;
     String updateComponent = "";
     float currentBluetoothWeight = 0.0f;
+    mutable SemaphoreHandle_t queueMutex = nullptr;
+    std::deque<WebSocketInboundMessage> inboundMessages;
+    std::deque<WebSocketOutboundMessage> outboundMessages;
+    bool pendingSettingsChanged = false;
+    bool pendingRestart = false;
+    uint32_t lastRebuildProgressVersion = 0;
 };
 
 #endif // WEBUIPLUGIN_H
