@@ -4,7 +4,6 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
-#include <display/core/RecursiveLock.h>
 #include <display/core/constants.h>
 #include <display/core/utils.h>
 #include <vector>
@@ -55,230 +54,62 @@ class Settings {
     void save(bool noDelay = false);
 
     // Getters and setters
-    int getTargetSteamTemp() const {
-        RecursiveLockGuard lock(mutex);
-        return targetSteamTemp;
-    }
-    int getTargetWaterTemp() const {
-        RecursiveLockGuard lock(mutex);
-        return targetWaterTemp;
-    }
-    int getTemperatureOffset() const {
-        RecursiveLockGuard lock(mutex);
-        return temperatureOffset;
-    }
-    float getPressureScaling() const {
-        RecursiveLockGuard lock(mutex);
-        return pressureScaling;
-    }
-    double getTargetGrindVolume() const {
-        RecursiveLockGuard lock(mutex);
-        return targetGrindVolume;
-    }
-    int getTargetGrindDuration() const {
-        RecursiveLockGuard lock(mutex);
-        return targetGrindDuration;
-    }
-    int getStartupMode() const {
-        RecursiveLockGuard lock(mutex);
-        return startupMode;
-    }
-    int getStandbyTimeout() const {
-        RecursiveLockGuard lock(mutex);
-        return standbyTimeout;
-    }
-    double getBrewDelay() const {
-        RecursiveLockGuard lock(mutex);
-        return brewDelay;
-    }
-    double getGrindDelay() const {
-        RecursiveLockGuard lock(mutex);
-        return grindDelay;
-    }
-    bool isDelayAdjust() const {
-        RecursiveLockGuard lock(mutex);
-        return delayAdjust;
-    }
-    String getPid() const {
-        RecursiveLockGuard lock(mutex);
-        return pid;
-    }
-    String getPumpModelCoeffs() const {
-        RecursiveLockGuard lock(mutex);
-        return pumpModelCoeffs;
-    }
-    String getWifiSsid() const {
-        RecursiveLockGuard lock(mutex);
-        return wifiSsid;
-    }
-    String getWifiPassword() const {
-        RecursiveLockGuard lock(mutex);
-        return wifiPassword;
-    }
-    String getMdnsName() const {
-        RecursiveLockGuard lock(mutex);
-        return mdnsName;
-    }
-    bool isHomekit() const {
-        RecursiveLockGuard lock(mutex);
-        return homekit;
-    }
-    bool isVolumetricTarget() const {
-        RecursiveLockGuard lock(mutex);
-        return volumetricTarget;
-    }
-    String getOTAChannel() const {
-        RecursiveLockGuard lock(mutex);
-        return otaChannel;
-    }
-    String getSavedScale() const {
-        RecursiveLockGuard lock(mutex);
-        return savedScale;
-    }
-    bool isBoilerFillActive() const {
-        RecursiveLockGuard lock(mutex);
-        return boilerFillActive;
-    }
-    int getStartupFillTime() const {
-        RecursiveLockGuard lock(mutex);
-        return startupFillTime;
-    }
-    int getSteamFillTime() const {
-        RecursiveLockGuard lock(mutex);
-        return steamFillTime;
-    }
-    bool isSmartGrindActive() const {
-        RecursiveLockGuard lock(mutex);
-        return smartGrindActive;
-    }
-    int getSmartGrindMode() const {
-        RecursiveLockGuard lock(mutex);
-        return smartGrindMode;
-    }
-    String getSmartGrindIp() const {
-        RecursiveLockGuard lock(mutex);
-        return smartGrindIp;
-    }
-    bool isHomeAssistant() const {
-        RecursiveLockGuard lock(mutex);
-        return homeAssistant;
-    }
-    String getHomeAssistantIP() const {
-        RecursiveLockGuard lock(mutex);
-        return homeAssistantIP;
-    }
-    String getHomeAssistantUser() const {
-        RecursiveLockGuard lock(mutex);
-        return homeAssistantUser;
-    }
-    String getHomeAssistantPassword() const {
-        RecursiveLockGuard lock(mutex);
-        return homeAssistantPassword;
-    }
-    int getHomeAssistantPort() const {
-        RecursiveLockGuard lock(mutex);
-        return homeAssistantPort;
-    }
-    String getHomeAssistantTopic() const {
-        RecursiveLockGuard lock(mutex);
-        return homeAssistantTopic;
-    }
-    bool isMomentaryButtons() const {
-        RecursiveLockGuard lock(mutex);
-        return momentaryButtons;
-    }
-    String getTimezone() const {
-        RecursiveLockGuard lock(mutex);
-        return timezone;
-    }
-    bool isClock24hFormat() const {
-        RecursiveLockGuard lock(mutex);
-        return clock24hFormat;
-    }
-    String getSelectedProfile() const {
-        RecursiveLockGuard lock(mutex);
-        return selectedProfile;
-    }
-    std::vector<String> getFavoritedProfiles() const {
-        RecursiveLockGuard lock(mutex);
-        return favoritedProfiles;
-    }
-    std::vector<String> getProfileOrder() const {
-        RecursiveLockGuard lock(mutex);
-        return profileOrder;
-    }
-    int getMainBrightness() const {
-        RecursiveLockGuard lock(mutex);
-        return mainBrightness;
-    }
-    int getStandbyBrightness() const {
-        RecursiveLockGuard lock(mutex);
-        return standbyBrightness;
-    }
-    int getStandbyBrightnessTimeout() const {
-        RecursiveLockGuard lock(mutex);
-        return standbyBrightnessTimeout;
-    }
-    int getWifiApTimeout() const {
-        RecursiveLockGuard lock(mutex);
-        return wifiApTimeout;
-    }
-    float getSteamPumpPercentage() const {
-        RecursiveLockGuard lock(mutex);
-        return steamPumpPercentage;
-    }
-    float getSteamPumpCutoff() const {
-        RecursiveLockGuard lock(mutex);
-        return steamPumpCutoff;
-    }
-    int getThemeMode() const {
-        RecursiveLockGuard lock(mutex);
-        return themeMode;
-    }
-    int getHistoryIndex() const {
-        RecursiveLockGuard lock(mutex);
-        return historyIndex;
-    }
-    int getSunriseR() const {
-        RecursiveLockGuard lock(mutex);
-        return sunriseR;
-    }
-    int getSunriseG() const {
-        RecursiveLockGuard lock(mutex);
-        return sunriseG;
-    }
-    int getSunriseB() const {
-        RecursiveLockGuard lock(mutex);
-        return sunriseB;
-    }
-    int getSunriseW() const {
-        RecursiveLockGuard lock(mutex);
-        return sunriseW;
-    }
-    int getSunriseExtBrightness() const {
-        RecursiveLockGuard lock(mutex);
-        return sunriseExtBrightness;
-    }
-    int getEmptyTankDistance() const {
-        RecursiveLockGuard lock(mutex);
-        return emptyTankDistance;
-    }
-    int getFullTankDistance() const {
-        RecursiveLockGuard lock(mutex);
-        return fullTankDistance;
-    }
-    int getAltRelayFunction() const {
-        RecursiveLockGuard lock(mutex);
-        return altRelayFunction;
-    }
-    bool isAutoWakeupEnabled() const {
-        RecursiveLockGuard lock(mutex);
-        return autowakeupEnabled;
-    }
-    std::vector<AutoWakeupSchedule> getAutoWakeupSchedules() const {
-        RecursiveLockGuard lock(mutex);
-        return autowakeupSchedules;
-    }
+    int getTargetSteamTemp() const { return targetSteamTemp; }
+    int getTargetWaterTemp() const { return targetWaterTemp; }
+    int getTemperatureOffset() const { return temperatureOffset; }
+    float getPressureScaling() const { return pressureScaling; }
+    double getTargetGrindVolume() const { return targetGrindVolume; }
+    int getTargetGrindDuration() const { return targetGrindDuration; }
+    int getStartupMode() const { return startupMode; }
+    int getStandbyTimeout() const { return standbyTimeout; }
+    double getBrewDelay() const { return brewDelay; }
+    double getGrindDelay() const { return grindDelay; }
+    bool isDelayAdjust() const { return delayAdjust; }
+    String getPid() const { return pid; }
+    String getPumpModelCoeffs() const { return pumpModelCoeffs; }
+    String getWifiSsid() const { return wifiSsid; }
+    String getWifiPassword() const { return wifiPassword; }
+    String getMdnsName() const { return mdnsName; }
+    bool isHomekit() const { return homekit; }
+    bool isVolumetricTarget() const { return volumetricTarget; }
+    String getOTAChannel() const { return otaChannel; }
+    String getSavedScale() const { return savedScale; }
+    bool isBoilerFillActive() const { return boilerFillActive; }
+    int getStartupFillTime() const { return startupFillTime; }
+    int getSteamFillTime() const { return steamFillTime; }
+    bool isSmartGrindActive() const { return smartGrindActive; }
+    int getSmartGrindMode() const { return smartGrindMode; }
+    String getSmartGrindIp() const { return smartGrindIp; }
+    bool isHomeAssistant() const { return homeAssistant; }
+    String getHomeAssistantIP() const { return homeAssistantIP; }
+    String getHomeAssistantUser() const { return homeAssistantUser; }
+    String getHomeAssistantPassword() const { return homeAssistantPassword; }
+    int getHomeAssistantPort() const { return homeAssistantPort; }
+    String getHomeAssistantTopic() const { return homeAssistantTopic; }
+    bool isMomentaryButtons() const { return momentaryButtons; }
+    String getTimezone() const { return timezone; }
+    bool isClock24hFormat() const { return clock24hFormat; }
+    String getSelectedProfile() const { return selectedProfile; }
+    const std::vector<String> &getFavoritedProfiles() const { return favoritedProfiles; }
+    std::vector<String> getProfileOrder() const { return profileOrder; }
+    int getMainBrightness() const { return mainBrightness; }
+    int getStandbyBrightness() const { return standbyBrightness; }
+    int getStandbyBrightnessTimeout() const { return standbyBrightnessTimeout; }
+    int getWifiApTimeout() const { return wifiApTimeout; }
+    float getSteamPumpPercentage() const { return steamPumpPercentage; }
+    float getSteamPumpCutoff() const { return steamPumpCutoff; }
+    int getThemeMode() const { return themeMode; }
+    int getHistoryIndex() const { return historyIndex; }
+    int getSunriseR() const { return sunriseR; }
+    int getSunriseG() const { return sunriseG; }
+    int getSunriseB() const { return sunriseB; }
+    int getSunriseW() const { return sunriseW; }
+    int getSunriseExtBrightness() const { return sunriseExtBrightness; }
+    int getEmptyTankDistance() const { return emptyTankDistance; }
+    int getFullTankDistance() const { return fullTankDistance; }
+    int getAltRelayFunction() const { return altRelayFunction; }
+    bool isAutoWakeupEnabled() const { return autowakeupEnabled; }
+    std::vector<AutoWakeupSchedule> getAutoWakeupSchedules() const { return autowakeupSchedules; }
     void setTargetSteamTemp(int target_steam_temp);
     void setTargetWaterTemp(int target_water_temp);
     void setTemperatureOffset(int temperature_offset);
@@ -341,8 +172,6 @@ class Settings {
   private:
     Preferences preferences;
     bool dirty = false;
-    int batchDepth = 0;
-    mutable SemaphoreHandle_t mutex = nullptr;
 
     String selectedProfile;
     int targetSteamTemp = 155;
@@ -407,7 +236,6 @@ class Settings {
     int altRelayFunction = ALT_RELAY_GRIND; // Default to grind
 
     void doSave();
-    void markDirtyLocked(bool noDelay);
     xTaskHandle taskHandle;
     static void loopTask(void *arg);
 };

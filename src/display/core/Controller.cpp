@@ -1,6 +1,5 @@
 #include "Controller.h"
 #include "ArduinoJson.h"
-#include "RecursiveLock.h"
 #include "esp_sntp.h"
 #include <SD_MMC.h>
 #include <SPIFFS.h>
@@ -30,15 +29,6 @@
 #endif
 
 const String LOG_TAG = F("Controller");
-
-Controller::Controller() { stateMutex = xSemaphoreCreateRecursiveMutex(); }
-
-Controller::~Controller() {
-    if (stateMutex != nullptr) {
-        vSemaphoreDelete(stateMutex);
-        stateMutex = nullptr;
-    }
-}
 
 void Controller::setup() {
     mode = settings.getStartupMode();
@@ -88,7 +78,7 @@ void Controller::setup() {
 
     pluginManager->on("profiles:profile:save", [this](Event const &event) {
         String id = event.getString("id");
-        if (id == profileManager->getSelectedProfileSnapshot().id) {
+        if (id == profileManager->getSelectedProfile().id) {
             this->handleProfileUpdate();
         }
     });
@@ -308,66 +298,56 @@ void Controller::loop() {
     }
 
     if (now - lastProgress > PROGRESS_INTERVAL) {
-        bool shouldDeactivate = false;
-        bool shouldActivateSteam = false;
-        {
-            RecursiveLockGuard lock(stateMutex);
-
-            if (mode == MODE_STEAM && !steamReady && currentTemp + 5.f > getTargetTemp()) {
-                steamReady = true;
-                shouldActivateSteam = true;
-            }
-
-            if (currentProcess != nullptr) {
-                updateLastAction();
-                if (currentProcess->getType() == MODE_BREW) {
-                    auto *brewProcess = static_cast<BrewProcess *>(currentProcess);
-                    brewProcess->updatePressure(pressure);
-                    brewProcess->updateFlow(currentPumpFlow);
-                }
-                currentProcess->progress();
-                if (!currentProcess->isActive()) {
-                    shouldDeactivate = true;
-                }
-            }
-
-            if (lastProcess != nullptr && !lastProcess->isComplete()) {
-                lastProcess->progress();
-            }
-            if (lastProcess != nullptr && lastProcess->isComplete() && !processCompleted && settings.isDelayAdjust()) {
-                processCompleted = true;
-                if (lastProcess->getType() == MODE_BREW) {
-                    if (auto *brewProcess = static_cast<BrewProcess *>(lastProcess);
-                        brewProcess->target == ProcessTarget::VOLUMETRIC) {
-                        double newDelay = brewProcess->getNewDelayTime();
-                        if (newDelay >= 0) {
-                            settings.setBrewDelay(newDelay);
-                        }
-                    }
-                } else if (lastProcess->getType() == MODE_GRIND) {
-                    if (auto *grindProcess = static_cast<GrindProcess *>(lastProcess);
-                        grindProcess->target == ProcessTarget::VOLUMETRIC) {
-                        double newDelay = grindProcess->getNewDelayTime();
-                        if (newDelay >= 0) {
-                            settings.setGrindDelay(newDelay);
-                        }
-                    }
-                }
-            }
-        }
-
-        if (shouldActivateSteam) {
+        // Check if steam is ready
+        if (mode == MODE_STEAM && !steamReady && currentTemp + 5.f > getTargetTemp()) {
             activate();
+            steamReady = true;
         }
-        if (shouldDeactivate) {
-            deactivate();
+
+        // Handle current process
+        if (currentProcess != nullptr) {
+            updateLastAction();
+            if (currentProcess->getType() == MODE_BREW) {
+                auto brewProcess = static_cast<BrewProcess *>(currentProcess);
+                brewProcess->updatePressure(pressure);
+                brewProcess->updateFlow(currentPumpFlow);
+            }
+            currentProcess->progress();
+            if (!isActive()) {
+                deactivate();
+            }
+        }
+
+        // Handle last process - Calculate auto delay
+        if (lastProcess != nullptr && !lastProcess->isComplete()) {
+            lastProcess->progress();
+        }
+        if (lastProcess != nullptr && lastProcess->isComplete() && !processCompleted && settings.isDelayAdjust()) {
+            processCompleted = true;
+            if (lastProcess->getType() == MODE_BREW) {
+                if (auto *brewProcess = static_cast<BrewProcess *>(lastProcess);
+                    brewProcess->target == ProcessTarget::VOLUMETRIC) {
+                    double newDelay = brewProcess->getNewDelayTime();
+                    if (newDelay >= 0) {
+                        settings.setBrewDelay(newDelay);
+                    }
+                }
+            } else if (lastProcess->getType() == MODE_GRIND) {
+                if (auto *grindProcess = static_cast<GrindProcess *>(lastProcess);
+                    grindProcess->target == ProcessTarget::VOLUMETRIC) {
+                    double newDelay = grindProcess->getNewDelayTime();
+                    if (newDelay >= 0) {
+                        settings.setGrindDelay(newDelay);
+                    }
+                }
+            }
         }
         lastProgress = now;
     }
 
     if (grindActiveUntil != 0 && now > grindActiveUntil)
         deactivateGrind();
-    if (getMode() != MODE_STANDBY && settings.getStandbyTimeout() > 0 && now > lastAction + settings.getStandbyTimeout())
+    if (mode != MODE_STANDBY && settings.getStandbyTimeout() > 0 && now > lastAction + settings.getStandbyTimeout())
         activateStandby();
 }
 
@@ -395,7 +375,7 @@ void Controller::autotune(int testTime, int samples) {
     if (isActive() || !isReady()) {
         return;
     }
-    if (getMode() != MODE_STANDBY) {
+    if (mode != MODE_STANDBY) {
         activateStandby();
     }
     autotuning = true;
@@ -408,26 +388,22 @@ void Controller::startProcess(Process *process) {
         delete process;
         return;
     }
-    {
-        RecursiveLockGuard lock(stateMutex);
-        processCompleted = false;
-        currentProcess = process;
-    }
+    processCompleted = false;
+    this->currentProcess = process;
     pluginManager->trigger("controller:process:start");
     updateLastAction();
 }
 
 float Controller::getTargetTemp() const {
-    RecursiveLockGuard lock(stateMutex);
     Process *proc = currentProcess;
     switch (mode) {
     case MODE_BREW:
     case MODE_GRIND:
         if (proc != nullptr && proc->isActive() && proc->getType() == MODE_BREW) {
-            auto *brewProcess = static_cast<BrewProcess *>(proc);
+            auto brewProcess = static_cast<BrewProcess *>(proc);
             return brewProcess->getTemperature();
         }
-        return profileManager->getSelectedProfileSnapshot().temperature;
+        return profileManager->getSelectedProfile().temperature;
     case MODE_STEAM:
         return settings.getTargetSteamTemp();
     case MODE_WATER:
@@ -439,11 +415,10 @@ float Controller::getTargetTemp() const {
 
 void Controller::setTargetTemp(float temperature) {
     pluginManager->trigger("boiler:targetTemperature:change", "value", temperature);
-    const int currentMode = getMode();
-    switch (currentMode) {
+    switch (mode) {
     case MODE_BREW:
     case MODE_GRIND:
-        profileManager->mutateSelectedProfile([temperature](Profile &profile) { profile.temperature = temperature; });
+        profileManager->getSelectedProfile().temperature = temperature;
         break;
     case MODE_STEAM:
         settings.setTargetSteamTemp(static_cast<int>(temperature));
@@ -495,26 +470,20 @@ void Controller::lowerTemp() {
 }
 
 void Controller::raiseBrewTarget() {
-    Profile profile = profileManager->getSelectedProfileSnapshot();
-    profileManager->mutateSelectedProfile([this, &profile](Profile &selectedProfile) {
-        if (isVolumetricAvailable() && profile.isVolumetric()) {
-            selectedProfile.adjustVolumetricTarget(1);
-        } else {
-            selectedProfile.adjustDuration(1);
-        }
-    });
+    if (isVolumetricAvailable() && profileManager->getSelectedProfile().isVolumetric()) {
+        profileManager->getSelectedProfile().adjustVolumetricTarget(1);
+    } else {
+        profileManager->getSelectedProfile().adjustDuration(1);
+    }
     handleProfileUpdate();
 }
 
 void Controller::lowerBrewTarget() {
-    Profile profile = profileManager->getSelectedProfileSnapshot();
-    profileManager->mutateSelectedProfile([this, &profile](Profile &selectedProfile) {
-        if (isVolumetricAvailable() && profile.isVolumetric()) {
-            selectedProfile.adjustVolumetricTarget(-1);
-        } else {
-            selectedProfile.adjustDuration(-1);
-        }
-    });
+    if (isVolumetricAvailable() && profileManager->getSelectedProfile().isVolumetric()) {
+        profileManager->getSelectedProfile().adjustVolumetricTarget(-1);
+    } else {
+        profileManager->getSelectedProfile().adjustDuration(-1);
+    }
     handleProfileUpdate();
 }
 
@@ -551,63 +520,45 @@ void Controller::lowerGrindTarget() {
 }
 
 void Controller::updateControl() {
-    bool active = false;
-    bool relayActive = false;
-    bool useAdvanced = false;
-    bool advancedPressureTarget = false;
-    bool altRelayActive = false;
-    float pumpValue = 0.0f;
-    float pressureTarget = 0.0f;
-    float flowTarget = 0.0f;
+    // Local capture to avoid race condition with deactivate() running on another core
+    Process *proc = currentProcess;
+    bool active = isActive();
 
     float targetTemp = getTargetTemp();
     if (targetTemp > .0f) {
         targetTemp = targetTemp + static_cast<float>(settings.getTemperatureOffset());
     }
 
-    {
-        RecursiveLockGuard lock(stateMutex);
-        Process *proc = currentProcess;
-        active = proc != nullptr && proc->isActive();
-
-        if (active && proc != nullptr) {
-            altRelayActive = proc->isAltRelayActive() &&
-                             (proc->getType() == MODE_GRIND && settings.getAltRelayFunction() == ALT_RELAY_GRIND);
-
-            if (systemInfo.capabilities.pressure) {
-                if (proc->getType() == MODE_STEAM) {
-                    useAdvanced = true;
-                    pressureTarget = settings.getSteamPumpCutoff();
-                    flowTarget = proc->getPumpValue() * 0.1f;
-                } else if (proc->getType() == MODE_BREW) {
-                    auto *brewProcess = static_cast<BrewProcess *>(proc);
-                    if (brewProcess->isAdvancedPump()) {
-                        useAdvanced = true;
-                        relayActive = brewProcess->isRelayActive();
-                        advancedPressureTarget = brewProcess->getPumpTarget() == PumpTarget::PUMP_TARGET_PRESSURE;
-                        pressureTarget = brewProcess->getPumpPressure();
-                        flowTarget = brewProcess->getPumpFlow();
-                    }
-                }
-            }
-
-            if (!useAdvanced) {
-                relayActive = proc->isRelayActive();
-                pumpValue = proc->getPumpValue();
-            }
+    bool altRelayActive = false;
+    if (active && proc->isAltRelayActive()) {
+        if (proc->getType() == MODE_GRIND && settings.getAltRelayFunction() == ALT_RELAY_GRIND) {
+            altRelayActive = true;
         }
     }
 
     clientController.sendAltControl(altRelayActive);
-    if (active && useAdvanced) {
-        targetPressure = pressureTarget;
-        targetFlow = flowTarget;
-        clientController.sendAdvancedOutputControl(relayActive, targetTemp, advancedPressureTarget, targetPressure, targetFlow);
-        return;
+    if (active && systemInfo.capabilities.pressure) {
+        if (proc->getType() == MODE_STEAM) {
+            targetPressure = settings.getSteamPumpCutoff();
+            targetFlow = proc->getPumpValue() * 0.1f;
+            clientController.sendAdvancedOutputControl(false, targetTemp, false, targetPressure, targetFlow);
+            return;
+        }
+        if (proc->getType() == MODE_BREW) {
+            auto *brewProcess = static_cast<BrewProcess *>(proc);
+            if (brewProcess->isAdvancedPump()) {
+                clientController.sendAdvancedOutputControl(brewProcess->isRelayActive(), targetTemp,
+                                                           brewProcess->getPumpTarget() == PumpTarget::PUMP_TARGET_PRESSURE,
+                                                           brewProcess->getPumpPressure(), brewProcess->getPumpFlow());
+                targetPressure = brewProcess->getPumpPressure();
+                targetFlow = brewProcess->getPumpFlow();
+                return;
+            }
+        }
     }
     targetPressure = 0.0f;
     targetFlow = 0.0f;
-    clientController.sendOutputControl(active && relayActive, active ? pumpValue : 0, targetTemp);
+    clientController.sendOutputControl(active && proc->isRelayActive(), active ? proc->getPumpValue() : 0, targetTemp);
 }
 
 void Controller::activate() {
@@ -615,33 +566,25 @@ void Controller::activate() {
         return;
     clear();
     clientController.tare();
-    const int currentMode = getMode();
     if (isVolumetricAvailable()) {
 #ifdef NIGHTLY_BUILD
-        {
-            RecursiveLockGuard lock(stateMutex);
-            currentVolumetricSource =
-                isBluetoothScaleHealthy() ? VolumetricMeasurementSource::BLUETOOTH : VolumetricMeasurementSource::FLOW_ESTIMATION;
-        }
+        currentVolumetricSource =
+            isBluetoothScaleHealthy() ? VolumetricMeasurementSource::BLUETOOTH : VolumetricMeasurementSource::FLOW_ESTIMATION;
 #else
-        {
-            RecursiveLockGuard lock(stateMutex);
-            currentVolumetricSource = VolumetricMeasurementSource::BLUETOOTH;
-        }
+        currentVolumetricSource = VolumetricMeasurementSource::BLUETOOTH;
 #endif
-        if (currentMode == MODE_BREW) {
+        if (mode == MODE_BREW) {
             pluginManager->trigger("controller:brew:prestart");
         }
     }
     delay(200);
-    switch (currentMode) {
+    switch (mode) {
     case MODE_BREW:
-        {
-            Profile profile = profileManager->getSelectedProfileSnapshot();
-            startProcess(new BrewProcess(profile, profile.isVolumetric() && isVolumetricAvailable() ? ProcessTarget::VOLUMETRIC
-                                                                                                     : ProcessTarget::TIME,
-                                         settings.getBrewDelay()));
-        }
+        startProcess(new BrewProcess(profileManager->getSelectedProfile(),
+                                     profileManager->getSelectedProfile().isVolumetric() && isVolumetricAvailable()
+                                         ? ProcessTarget::VOLUMETRIC
+                                         : ProcessTarget::TIME,
+                                     settings.getBrewDelay()));
         break;
     case MODE_STEAM:
         startProcess(new SteamProcess(STEAM_SAFETY_DURATION_MS, settings.getSteamPumpPercentage()));
@@ -651,31 +594,21 @@ void Controller::activate() {
         break;
     default:;
     }
-    ProcessSnapshot snapshot = getProcessSnapshot(false);
-    if (snapshot.available && snapshot.current && snapshot.type == MODE_BREW) {
+    if (currentProcess != nullptr && currentProcess->getType() == MODE_BREW) {
         pluginManager->trigger("controller:brew:start");
     }
 }
 
 void Controller::deactivate() {
-    Process *endedProcess = nullptr;
-    {
-        RecursiveLockGuard lock(stateMutex);
-        if (currentProcess == nullptr) {
-            return;
-        }
-        delete lastProcess;
-        lastProcess = currentProcess;
-        currentProcess = nullptr;
-        endedProcess = lastProcess;
-    }
-
-    if (endedProcess == nullptr) {
+    if (currentProcess == nullptr) {
         return;
     }
-    if (endedProcess->getType() == MODE_BREW) {
+    delete lastProcess;
+    lastProcess = currentProcess;
+    currentProcess = nullptr;
+    if (lastProcess->getType() == MODE_BREW) {
         pluginManager->trigger("controller:brew:end");
-    } else if (endedProcess->getType() == MODE_GRIND) {
+    } else if (lastProcess->getType() == MODE_GRIND) {
         pluginManager->trigger("controller:grind:end");
     }
     pluginManager->trigger("controller:process:end");
@@ -683,18 +616,13 @@ void Controller::deactivate() {
 }
 
 void Controller::clear() {
-    bool shouldClearBrew = false;
-    {
-        RecursiveLockGuard lock(stateMutex);
-        processCompleted = true;
-        shouldClearBrew = lastProcess != nullptr && lastProcess->getType() == MODE_BREW;
-        delete lastProcess;
-        lastProcess = nullptr;
-        currentVolumetricSource = VolumetricMeasurementSource::INACTIVE;
-    }
-    if (shouldClearBrew) {
+    processCompleted = true;
+    if (lastProcess != nullptr && lastProcess->getType() == MODE_BREW) {
         pluginManager->trigger("controller:brew:clear");
     }
+    delete lastProcess;
+    lastProcess = nullptr;
+    currentVolumetricSource = VolumetricMeasurementSource::INACTIVE;
 }
 
 void Controller::activateGrind() {
@@ -703,10 +631,7 @@ void Controller::activateGrind() {
         return;
     clear();
     if (settings.isVolumetricTarget() && isVolumetricAvailable()) {
-        {
-            RecursiveLockGuard lock(stateMutex);
-            currentVolumetricSource = VolumetricMeasurementSource::BLUETOOTH;
-        }
+        currentVolumetricSource = VolumetricMeasurementSource::BLUETOOTH;
         startProcess(new GrindProcess(ProcessTarget::VOLUMETRIC, 0, settings.getTargetGrindVolume(), settings.getGrindDelay()));
     } else {
         startProcess(
@@ -730,29 +655,21 @@ void Controller::deactivateStandby() {
 }
 
 bool Controller::isActive() const {
-    RecursiveLockGuard lock(stateMutex);
     Process *proc = currentProcess;
     return proc != nullptr && proc->isActive();
 }
 
 bool Controller::isGrindActive() const {
-    RecursiveLockGuard lock(stateMutex);
     Process *proc = currentProcess;
     return proc != nullptr && proc->isActive() && proc->getType() == MODE_GRIND;
 }
 
-int Controller::getMode() const {
-    RecursiveLockGuard lock(stateMutex);
-    return mode;
-}
+int Controller::getMode() const { return mode; }
 
 void Controller::setMode(int newMode) {
     Event modeEvent = pluginManager->trigger("controller:mode:change", "value", newMode);
-    {
-        RecursiveLockGuard lock(stateMutex);
-        mode = modeEvent.getInt("value");
-        steamReady = false;
-    }
+    mode = modeEvent.getInt("value");
+    steamReady = false;
 
     updateLastAction();
     setTargetTemp(getTargetTemp());
@@ -771,15 +688,15 @@ void Controller::onOTAUpdate() {
     updating = true;
 }
 
-void Controller::onProfileSave() const { profileManager->saveSelectedProfile(); }
+void Controller::onProfileSave() const { profileManager->saveProfile(profileManager->getSelectedProfile()); }
 
 void Controller::onProfileSaveAsNew() {
-    Profile profile = profileManager->getSelectedProfileSnapshot();
-    profile.label = "Copy of " + profile.label;
+    Profile &profile = profileManager->getSelectedProfile();
+    profile.label = "Copy of " + profileManager->getSelectedProfile().label;
     profile.id = generateShortID();
-    if (profileManager->saveProfile(profile)) {
-        profileManager->selectProfile(profile.id);
-    }
+    settings.setSelectedProfile(profile.id);
+    profileManager->saveProfile(profileManager->getSelectedProfile());
+    profileManager->addFavoritedProfile(profile.id);
 }
 
 void Controller::onVolumetricMeasurement(double measurement, VolumetricMeasurementSource source) {
@@ -788,11 +705,9 @@ void Controller::onVolumetricMeasurement(double measurement, VolumetricMeasureme
                                : F("controller:volumetric-measurement:bluetooth:change"),
                            "value", static_cast<float>(measurement));
     if (source == VolumetricMeasurementSource::BLUETOOTH) {
-        RecursiveLockGuard lock(stateMutex);
         lastBluetoothMeasurement = millis();
     }
 
-    RecursiveLockGuard lock(stateMutex);
     if (currentVolumetricSource != source) {
         ESP_LOGD(LOG_TAG, "Ignoring volumetric measurement, source does not match");
         return;
@@ -806,7 +721,6 @@ void Controller::onVolumetricMeasurement(double measurement, VolumetricMeasureme
 }
 
 bool Controller::isBluetoothScaleHealthy() const {
-    RecursiveLockGuard lock(stateMutex);
     unsigned long timeSinceLastBluetooth = millis() - lastBluetoothMeasurement;
     return (timeSinceLastBluetooth < BLUETOOTH_GRACE_PERIOD_MS) || volumetricOverride;
 }
@@ -821,11 +735,9 @@ void Controller::onFlush() {
 }
 
 void Controller::onVolumetricDelete() {
-    profileManager->mutateSelectedProfile([](Profile &profile) {
-        if (profile.isVolumetric()) {
-            profile.removeVolumetricTarget();
-        }
-    });
+    if (profileManager->getSelectedProfile().isVolumetric()) {
+        profileManager->getSelectedProfile().removeVolumetricTarget();
+    }
 }
 
 void Controller::handleBrewButton(int brewButtonStatus) {
@@ -888,76 +800,9 @@ void Controller::handleSteamButton(int steamButtonStatus) {
 }
 
 void Controller::handleProfileUpdate() {
-    Profile profile = profileManager->getSelectedProfileSnapshot();
-    pluginManager->trigger("boiler:targetTemperature:change", "value", profile.temperature);
-    pluginManager->trigger("controller:targetDuration:change", "value", profile.getTotalDuration());
-    pluginManager->trigger("controller:targetVolume:change", "value", profile.getTotalVolume());
-}
-
-ProcessSnapshot Controller::getProcessSnapshot(bool includeLast) const {
-    RecursiveLockGuard lock(stateMutex);
-    ProcessSnapshot snapshot;
-
-    Process *proc = currentProcess;
-    snapshot.current = true;
-    if (proc == nullptr && includeLast) {
-        proc = lastProcess;
-        snapshot.current = false;
-    }
-
-    if (proc == nullptr) {
-        return snapshot;
-    }
-
-    snapshot.available = true;
-    snapshot.active = proc->isActive();
-    snapshot.complete = proc->isComplete();
-    snapshot.type = proc->getType();
-    snapshot.relayActive = proc->isRelayActive();
-    snapshot.altRelayActive = proc->isAltRelayActive();
-    snapshot.pumpValue = proc->getPumpValue();
-    snapshot.isBrew = snapshot.type == MODE_BREW;
-    snapshot.isGrind = snapshot.type == MODE_GRIND;
-    snapshot.isSteam = snapshot.type == MODE_STEAM;
-    snapshot.isWater = snapshot.type == MODE_WATER;
-
-    if (snapshot.isBrew) {
-        auto *brewProcess = static_cast<BrewProcess *>(proc);
-        snapshot.target = brewProcess->target;
-        snapshot.profile = brewProcess->profile;
-        snapshot.phase = brewProcess->currentPhase;
-        snapshot.phaseIndex = brewProcess->phaseIndex;
-        snapshot.processStarted = brewProcess->processStarted;
-        snapshot.currentPhaseStarted = brewProcess->currentPhaseStarted;
-        snapshot.finished = brewProcess->finished;
-        snapshot.totalDuration = brewProcess->getTotalDuration();
-        snapshot.phaseDuration = brewProcess->getPhaseDuration();
-        snapshot.currentVolume = brewProcess->currentVolume;
-        snapshot.brewVolume = brewProcess->getBrewVolume();
-        snapshot.utility = brewProcess->isUtility();
-        snapshot.advancedPump = brewProcess->isAdvancedPump();
-        snapshot.temperature = brewProcess->getTemperature();
-        snapshot.targetVolume = brewProcess->profile.getTotalVolume();
-        snapshot.hasVolumetricTarget = brewProcess->currentPhase.hasVolumetricTarget();
-        if (snapshot.hasVolumetricTarget) {
-            snapshot.targetVolume = brewProcess->currentPhase.getVolumetricTarget().value;
-        }
-        if (snapshot.advancedPump) {
-            snapshot.pumpTarget = brewProcess->getPumpTarget();
-            snapshot.pumpPressure = brewProcess->getPumpPressure();
-            snapshot.pumpFlow = brewProcess->getPumpFlow();
-        }
-    } else if (snapshot.isGrind) {
-        auto *grindProcess = static_cast<GrindProcess *>(proc);
-        snapshot.target = grindProcess->target;
-        snapshot.processStarted = grindProcess->started;
-        snapshot.finished = grindProcess->finished;
-        snapshot.currentVolume = grindProcess->currentVolume;
-        snapshot.targetVolume = grindProcess->grindVolume;
-        snapshot.totalDuration = grindProcess->time;
-    }
-
-    return snapshot;
+    pluginManager->trigger("boiler:targetTemperature:change", "value", profileManager->getSelectedProfile().temperature);
+    pluginManager->trigger("controller:targetDuration:change", "value", profileManager->getSelectedProfile().getTotalDuration());
+    pluginManager->trigger("controller:targetVolume:change", "value", profileManager->getSelectedProfile().getTotalVolume());
 }
 
 void Controller::loopTask(void *arg) {

@@ -5,8 +5,6 @@
 #include "NimBLEComm.h"
 #include "PluginManager.h"
 #include "Settings.h"
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 #include <WiFi.h>
 #include <display/core/ProfileManager.h>
 #include <display/core/process/Process.h>
@@ -20,44 +18,9 @@ const IPAddress WIFI_SUBNET_MASK(255, 255, 255, 0); // no need to change: https:
 
 enum class VolumetricMeasurementSource { INACTIVE, FLOW_ESTIMATION, BLUETOOTH };
 
-struct ProcessSnapshot {
-    bool available = false;
-    bool current = false;
-    bool active = false;
-    bool complete = false;
-    int type = MODE_STANDBY;
-    bool relayActive = false;
-    bool altRelayActive = false;
-    float pumpValue = 0.0f;
-    bool isBrew = false;
-    bool isGrind = false;
-    bool isSteam = false;
-    bool isWater = false;
-    bool utility = false;
-    bool advancedPump = false;
-    bool hasVolumetricTarget = false;
-    ProcessTarget target = ProcessTarget::TIME;
-    PumpTarget pumpTarget = PumpTarget::PUMP_TARGET_PRESSURE;
-    Profile profile{};
-    Phase phase{};
-    unsigned int phaseIndex = 0;
-    unsigned long processStarted = 0;
-    unsigned long currentPhaseStarted = 0;
-    unsigned long finished = 0;
-    unsigned long totalDuration = 0;
-    unsigned long phaseDuration = 0;
-    double currentVolume = 0.0;
-    double brewVolume = 0.0;
-    float pumpPressure = 0.0f;
-    float pumpFlow = 0.0f;
-    float temperature = 0.0f;
-    float targetVolume = 0.0f;
-};
-
 class Controller {
   public:
-    Controller();
-    ~Controller();
+    Controller() = default;
 
     void setup();
     void connect();
@@ -91,9 +54,10 @@ class Controller {
 
     void autotune(int testTime, int samples);
     void startProcess(Process *process);
+    Process *getProcess() const { return currentProcess; }
+    Process *getLastProcess() const { return lastProcess; }
     Settings &getSettings() { return settings; }
     ProfileManager *getProfileManager() { return profileManager; }
-    ProcessSnapshot getProcessSnapshot(bool includeLast = true) const;
 #ifndef GAGGIMATE_HEADLESS
     DefaultUI *getUI() const { return ui; }
 #endif
@@ -210,7 +174,6 @@ class Controller {
     static const unsigned long BLUETOOTH_GRACE_PERIOD_MS = 1500; // 1.5 second grace period
     static const unsigned long CONTROLLER_WAITING_TIMEOUT_MS = 10000;
 
-    mutable SemaphoreHandle_t stateMutex = nullptr;
     xTaskHandle taskHandle;
 
     static void loopTask(void *arg);

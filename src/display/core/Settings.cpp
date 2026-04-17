@@ -4,8 +4,6 @@
 #include <utility>
 
 Settings::Settings() {
-    mutex = xSemaphoreCreateRecursiveMutex();
-    RecursiveLockGuard lock(mutex);
     preferences.begin(PREFERENCES_KEY, true);
     startupMode = preferences.getInt("sm", MODE_STANDBY);
     targetSteamTemp = preferences.getInt("ts", 145);
@@ -113,259 +111,215 @@ Settings::Settings() {
 }
 
 void Settings::batchUpdate(const SettingsCallback &callback) {
-    {
-        RecursiveLockGuard lock(mutex);
-        batchDepth++;
-        callback(this);
-        batchDepth--;
-        if (batchDepth == 0 && dirty) {
-            doSave();
-        }
-    }
+    callback(this);
+    save();
 }
 
 void Settings::save(bool noDelay) {
-    RecursiveLockGuard lock(mutex);
-    markDirtyLocked(noDelay);
+    if (noDelay) {
+        doSave();
+        return;
+    }
+    dirty = true;
 }
 
 void Settings::setTargetSteamTemp(const int target_steam_temp) {
-    RecursiveLockGuard lock(mutex);
     targetSteamTemp = target_steam_temp;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setTargetWaterTemp(const int target_water_temp) {
-    RecursiveLockGuard lock(mutex);
     targetWaterTemp = target_water_temp;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setTemperatureOffset(const int temperature_offset) {
-    RecursiveLockGuard lock(mutex);
     temperatureOffset = temperature_offset;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setPressureScaling(const float pressure_scaling) {
-    RecursiveLockGuard lock(mutex);
     pressureScaling = pressure_scaling;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setTargetGrindVolume(double target_grind_volume) {
-    RecursiveLockGuard lock(mutex);
     targetGrindVolume = target_grind_volume;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setTargetGrindDuration(const int target_duration) {
-    RecursiveLockGuard lock(mutex);
     targetGrindDuration = target_duration;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setBrewDelay(double brew_Delay) {
-    RecursiveLockGuard lock(mutex);
     brewDelay = std::clamp(brew_Delay, 0.0, 4000.0);
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setGrindDelay(double grind_Delay) {
-    RecursiveLockGuard lock(mutex);
     grindDelay = std::clamp(grind_Delay, 0.0, 4000.0);
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setDelayAdjust(bool delay_adjust) {
-    RecursiveLockGuard lock(mutex);
     delayAdjust = delay_adjust;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setStartupMode(const int startup_mode) {
-    RecursiveLockGuard lock(mutex);
     startupMode = startup_mode;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setStandbyTimeout(int standby_timeout) {
-    RecursiveLockGuard lock(mutex);
     standbyTimeout = standby_timeout;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setPid(const String &pid) {
-    RecursiveLockGuard lock(mutex);
     this->pid = pid;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setPumpModelCoeffs(const String &pumpModelCoeffs) {
-    RecursiveLockGuard lock(mutex);
     this->pumpModelCoeffs = pumpModelCoeffs;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setWifiSsid(const String &wifiSsid) {
-    RecursiveLockGuard lock(mutex);
     this->wifiSsid = wifiSsid;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setWifiPassword(const String &wifiPassword) {
-    RecursiveLockGuard lock(mutex);
     this->wifiPassword = wifiPassword;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setMdnsName(const String &mdnsName) {
-    RecursiveLockGuard lock(mutex);
     this->mdnsName = mdnsName;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setHomekit(const bool homekit) {
-    RecursiveLockGuard lock(mutex);
     this->homekit = homekit;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setVolumetricTarget(bool volumetric_target) {
-    RecursiveLockGuard lock(mutex);
     this->volumetricTarget = volumetric_target;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setOTAChannel(const String &otaChannel) {
-    RecursiveLockGuard lock(mutex);
     this->otaChannel = otaChannel;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSavedScale(const String &savedScale) {
-    RecursiveLockGuard lock(mutex);
     this->savedScale = savedScale;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setBoilerFillActive(bool boiler_fill_active) {
-    RecursiveLockGuard lock(mutex);
     boilerFillActive = boiler_fill_active;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setStartupFillTime(int startup_fill_time) {
-    RecursiveLockGuard lock(mutex);
     startupFillTime = startup_fill_time;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSteamFillTime(int steam_fill_time) {
-    RecursiveLockGuard lock(mutex);
     steamFillTime = steam_fill_time;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSmartGrindActive(bool smart_grind_active) {
-    RecursiveLockGuard lock(mutex);
     smartGrindActive = smart_grind_active;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSmartGrindIp(String smart_grind_ip) {
-    RecursiveLockGuard lock(mutex);
     this->smartGrindIp = std::move(smart_grind_ip);
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSmartGrindMode(int smart_grind_mode) {
-    RecursiveLockGuard lock(mutex);
     this->smartGrindMode = smart_grind_mode;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setHomeAssistant(const bool homeAssistant) {
-    RecursiveLockGuard lock(mutex);
     this->homeAssistant = homeAssistant;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setHomeAssistantIP(const String &homeAssistantIP) {
-    RecursiveLockGuard lock(mutex);
     this->homeAssistantIP = homeAssistantIP;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setHomeAssistantPort(const int homeAssistantPort) {
-    RecursiveLockGuard lock(mutex);
     this->homeAssistantPort = homeAssistantPort;
-    markDirtyLocked(false);
+    save();
 }
 void Settings::setHomeAssistantTopic(const String &homeAssistantTopic) {
-    RecursiveLockGuard lock(mutex);
     this->homeAssistantTopic = homeAssistantTopic;
-    markDirtyLocked(false);
+    save();
 }
 void Settings::setHomeAssistantUser(const String &homeAssistantUser) {
-    RecursiveLockGuard lock(mutex);
     this->homeAssistantUser = homeAssistantUser;
-    markDirtyLocked(false);
+    save();
 }
 void Settings::setHomeAssistantPassword(const String &homeAssistantPassword) {
-    RecursiveLockGuard lock(mutex);
     this->homeAssistantPassword = homeAssistantPassword;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setMomentaryButtons(bool momentary_buttons) {
-    RecursiveLockGuard lock(mutex);
     momentaryButtons = momentary_buttons;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setTimezone(String timezone) {
-    RecursiveLockGuard lock(mutex);
     this->timezone = std::move(timezone);
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setClockFormat(bool clock_24h_format) {
-    RecursiveLockGuard lock(mutex);
     this->clock24hFormat = clock_24h_format;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSelectedProfile(String selected_profile) {
-    RecursiveLockGuard lock(mutex);
     this->selectedProfile = std::move(selected_profile);
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setFavoritedProfiles(std::vector<String> favorited_profiles) {
-    RecursiveLockGuard lock(mutex);
     favoritedProfiles = std::move(favorited_profiles);
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::addFavoritedProfile(String profile) {
-    RecursiveLockGuard lock(mutex);
     if (std::find(favoritedProfiles.begin(), favoritedProfiles.end(), profile) != favoritedProfiles.end()) {
         return;
     }
     favoritedProfiles.emplace_back(profile);
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::removeFavoritedProfile(String profile) {
-    RecursiveLockGuard lock(mutex);
     favoritedProfiles.erase(std::remove(favoritedProfiles.begin(), favoritedProfiles.end(), profile), favoritedProfiles.end());
     favoritedProfiles.shrink_to_fit();
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setProfileOrder(std::vector<String> profile_order) {
-    RecursiveLockGuard lock(mutex);
     std::vector<String> cleaned;
     cleaned.reserve(profile_order.size());
     for (auto &id : profile_order) {
@@ -377,119 +331,97 @@ void Settings::setProfileOrder(std::vector<String> profile_order) {
     }
 
     profileOrder = std::move(cleaned);
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setMainBrightness(int main_brightness) {
-    RecursiveLockGuard lock(mutex);
     mainBrightness = main_brightness;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setStandbyBrightness(int standby_brightness) {
-    RecursiveLockGuard lock(mutex);
     standbyBrightness = standby_brightness;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setStandbyBrightnessTimeout(int standby_brightness_timeout) {
-    RecursiveLockGuard lock(mutex);
     standbyBrightnessTimeout = standby_brightness_timeout;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setWifiApTimeout(int timeout) {
-    RecursiveLockGuard lock(mutex);
     wifiApTimeout = timeout;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSteamPumpPercentage(float steam_pump_percentage) {
-    RecursiveLockGuard lock(mutex);
     steamPumpPercentage = steam_pump_percentage;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSteamPumpCutoff(float steam_pump_cutoff) {
-    RecursiveLockGuard lock(mutex);
     steamPumpCutoff = steam_pump_cutoff;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setThemeMode(int theme_mode) {
-    RecursiveLockGuard lock(mutex);
     themeMode = theme_mode;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setHistoryIndex(int history_index) {
-    RecursiveLockGuard lock(mutex);
     historyIndex = history_index;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSunriseR(int sunrise_r) {
-    RecursiveLockGuard lock(mutex);
     sunriseR = sunrise_r;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSunriseG(int sunrise_g) {
-    RecursiveLockGuard lock(mutex);
     sunriseG = sunrise_g;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSunriseB(int sunrise_b) {
-    RecursiveLockGuard lock(mutex);
     sunriseB = sunrise_b;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSunriseW(int sunrise_w) {
-    RecursiveLockGuard lock(mutex);
     sunriseW = sunrise_w;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setSunriseExtBrightness(int sunrise_ext_brightness) {
-    RecursiveLockGuard lock(mutex);
     sunriseExtBrightness = sunrise_ext_brightness;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setEmptyTankDistance(int empty_tank_distance) {
-    RecursiveLockGuard lock(mutex);
     emptyTankDistance = empty_tank_distance;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setFullTankDistance(int full_tank_distance) {
-    RecursiveLockGuard lock(mutex);
     fullTankDistance = full_tank_distance;
-    markDirtyLocked(false);
+    save();
 }
 
-void Settings::setAltRelayFunction(int alt_relay_function) {
-    RecursiveLockGuard lock(mutex);
-    altRelayFunction = alt_relay_function;
-    markDirtyLocked(false);
-}
+void Settings::setAltRelayFunction(int alt_relay_function) { altRelayFunction = alt_relay_function; }
 
 void Settings::setAutoWakeupEnabled(bool enabled) {
-    RecursiveLockGuard lock(mutex);
     autowakeupEnabled = enabled;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::setAutoWakeupSchedules(const std::vector<AutoWakeupSchedule> &schedules) {
-    RecursiveLockGuard lock(mutex);
     autowakeupSchedules = schedules;
-    markDirtyLocked(false);
+    save();
 }
 
 void Settings::doSave() {
-    RecursiveLockGuard lock(mutex);
     if (!dirty) {
         return;
     }
@@ -572,16 +504,6 @@ void Settings::doSave() {
     preferences.putInt("alt_relay", altRelayFunction);
 
     preferences.end();
-}
-
-void Settings::markDirtyLocked(bool noDelay) {
-    dirty = true;
-    if (batchDepth > 0) {
-        return;
-    }
-    if (noDelay) {
-        doSave();
-    }
 }
 
 [[noreturn]] void Settings::loopTask(void *arg) {

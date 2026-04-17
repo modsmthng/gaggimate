@@ -21,8 +21,9 @@
 #include <version.h>
 
 static std::unordered_map<uint32_t, std::string> rxBuffers;
+static WebUIPlugin *g_webUIPlugin = nullptr;
 
-WebUIPlugin::WebUIPlugin() : server(80), ws("/ws") { queueMutex = xSemaphoreCreateRecursiveMutex(); }
+WebUIPlugin::WebUIPlugin() : server(80), ws("/ws") { g_webUIPlugin = this; }
 
 void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) {
     this->controller = _controller;
@@ -51,19 +52,24 @@ void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) 
     });
     pluginManager->on("controller:autotune:result", [this](Event const &event) { sendAutotuneResult(); });
 
-    // Subscribe to Bluetooth scale weight updates
-    pluginManager->on("controller:volumetric-measurement:bluetooth:change", [this](Event const &event) {
-        RecursiveLockGuard lock(queueMutex);
-        currentBluetoothWeight = event.getFloat("value");
+    // Forward shot history rebuild progress events to WebSocket clients
+    pluginManager->on("evt:history-rebuild-progress", [this](Event const &event) {
+        JsonDocument doc;
+        doc["tp"] = "evt:history-rebuild-progress";
+        doc["total"] = event.getInt("total");
+        doc["current"] = event.getInt("current");
+        doc["status"] = event.getString("status");
+        ws.textAll(doc.as<String>());
     });
+
+    // Subscribe to Bluetooth scale weight updates
+    pluginManager->on("controller:volumetric-measurement:bluetooth:change",
+                      [this](Event const &event) { this->currentBluetoothWeight = event.getFloat("value"); });
 
     setupServer();
 }
 
 void WebUIPlugin::loop() {
-    processInboundMessages();
-    handleDeferredActions();
-
     if (updating) {
         pluginManager->trigger("ota:update:start");
         ota->update(updateComponent != "display", updateComponent != "controller");
@@ -82,11 +88,6 @@ void WebUIPlugin::loop() {
     }
     if (now > lastStatus + STATUS_PERIOD && !ws.getClients().empty()) {
         lastStatus = now;
-        float bluetoothWeight = 0.0f;
-        {
-            RecursiveLockGuard lock(queueMutex);
-            bluetoothWeight = currentBluetoothWeight;
-        }
         JsonDocument doc;
         doc["tp"] = "evt:status";
         doc["ct"] = controller->getCurrentTemp();
@@ -95,15 +96,15 @@ void WebUIPlugin::loop() {
         doc["fl"] = controller->getCurrentPumpFlow();
         doc["pt"] = controller->getTargetPressure();
         doc["m"] = controller->getMode();
-        Profile profile = controller->getProfileManager()->getSelectedProfileSnapshot();
-        doc["p"] = profile.label;
-        doc["puid"] = profile.id;
+        doc["p"] = controller->getProfileManager()->getSelectedProfile().label;
+        doc["puid"] = controller->getProfileManager()->getSelectedProfile().id;
         doc["cp"] = controller->getSystemInfo().capabilities.pressure;
         doc["cd"] = controller->getSystemInfo().capabilities.dimming;
-        doc["tw"] = profile.getTotalVolume(); // total target weight for the process
+        doc["tw"] = profileManager->getSelectedProfile().getTotalVolume(); // total target weight for the process
         doc["bta"] = controller->isVolumetricAvailable() ? 1 : 0;
-        doc["bt"] = controller->isVolumetricAvailable() && profile.isVolumetric() ? 1 : 0;
-        doc["btd"] = profile.getTotalDuration();
+        doc["bt"] =
+            controller->isVolumetricAvailable() && controller->getProfileManager()->getSelectedProfile().isVolumetric() ? 1 : 0;
+        doc["btd"] = profileManager->getSelectedProfile().getTotalDuration();
         doc["led"] = controller->getSystemInfo().capabilities.ledControl;
         doc["gtd"] = controller->getTargetGrindDuration();
         doc["gtv"] = controller->getSettings().getTargetGrindVolume();
@@ -116,44 +117,48 @@ void WebUIPlugin::loop() {
 
         bool bleConnected = BLEScales.isConnected();
         // Add Bluetooth scale weight information
-        doc["bw"] = bleConnected ? bluetoothWeight : 0; // current bluetooth weight
-        doc["cw"] = bleConnected ? bluetoothWeight : 0; // Use 'currentWeight' for forward compatbility
+        doc["bw"] = bleConnected ? this->currentBluetoothWeight : 0; // current bluetooth weight
+        doc["cw"] = bleConnected ? this->currentBluetoothWeight : 0; // Use 'currentWeight' for forward compatbility
         doc["bc"] = bleConnected;                                    // bluetooth scale connected status
 
-        ProcessSnapshot process = controller->getProcessSnapshot();
-        if (process.available) {
+        Process *process = controller->getProcess();
+        if (process == nullptr) {
+            process = controller->getLastProcess();
+        }
+        if (process != nullptr) {
             auto pObj = doc["process"].to<JsonObject>();
             pObj["a"] = controller->isActive() ? 1 : 0;
-            if (process.isBrew) {
-                unsigned long ts = process.active && controller->isActive() ? millis() : process.finished;
-                pObj["s"] = process.phase.phase == PhaseType::PHASE_TYPE_BREW ? "brew" : "infusion";
-                pObj["l"] = process.active ? process.phase.name.c_str() : "Finished";
-                pObj["e"] = ts - process.processStarted;
-                const bool isVolumetric =
-                    process.target == ProcessTarget::VOLUMETRIC && process.phase.hasVolumetricTarget() &&
-                    controller->isVolumetricAvailable();
+            if (process->getType() == MODE_BREW) {
+                auto *brew = static_cast<BrewProcess *>(process);
+                unsigned long ts = brew->isActive() && controller->isActive() ? millis() : brew->finished;
+                pObj["s"] = brew->currentPhase.phase == PhaseType::PHASE_TYPE_BREW ? "brew" : "infusion";
+                pObj["l"] = brew->isActive() ? brew->currentPhase.name.c_str() : "Finished";
+                pObj["e"] = ts - brew->processStarted;
+                const bool isVolumetric = brew->target == ProcessTarget::VOLUMETRIC && brew->currentPhase.hasVolumetricTarget() &&
+                                          controller->isVolumetricAvailable();
                 pObj["tt"] = isVolumetric ? "volumetric" : "time";
                 if (isVolumetric) {
-                    Target t = process.phase.getVolumetricTarget();
+                    Target t = brew->currentPhase.getVolumetricTarget();
                     pObj["pt"] = t.value;
-                    pObj["pp"] = process.currentVolume;
+                    pObj["pp"] = brew->currentVolume;
                 } else {
-                    pObj["pt"] = process.phaseDuration;
-                    pObj["pp"] = ts - process.currentPhaseStarted;
+                    pObj["pt"] = brew->getPhaseDuration();
+                    pObj["pp"] = ts - brew->currentPhaseStarted;
                 }
-            } else if (process.isGrind) {
-                unsigned long ts = process.active && controller->isActive() ? millis() : process.finished;
+            } else if (process->getType() == MODE_GRIND) {
+                auto *grind = static_cast<GrindProcess *>(process);
+                unsigned long ts = grind->isActive() && controller->isActive() ? millis() : grind->finished;
                 pObj["s"] = "grind";
-                pObj["l"] = process.active ? "Grinding" : "Finished";
-                pObj["e"] = ts - process.processStarted;
-                const bool isVolumetric = process.target == ProcessTarget::VOLUMETRIC && controller->isVolumetricAvailable();
+                pObj["l"] = grind->isActive() ? "Grinding" : "Finished";
+                pObj["e"] = ts - grind->started;
+                const bool isVolumetric = grind->target == ProcessTarget::VOLUMETRIC && controller->isVolumetricAvailable();
                 pObj["tt"] = isVolumetric ? "volumetric" : "time";
                 if (isVolumetric) {
-                    pObj["pt"] = process.targetVolume;
-                    pObj["pp"] = process.currentVolume;
+                    pObj["pt"] = grind->grindVolume;
+                    pObj["pp"] = grind->currentVolume;
                 } else {
-                    pObj["pt"] = process.totalDuration;
-                    pObj["pp"] = ts - process.processStarted;
+                    pObj["pt"] = grind->time;
+                    pObj["pp"] = ts - grind->started;
                 }
             }
         }
@@ -168,19 +173,6 @@ void WebUIPlugin::loop() {
         lastDns = now;
         dnsServer->processNextRequest();
     }
-
-    ShotHistoryRebuildProgress rebuildProgress = ShotHistory.getRebuildProgressSnapshot();
-    if (rebuildProgress.version != lastRebuildProgressVersion) {
-        lastRebuildProgressVersion = rebuildProgress.version;
-        JsonDocument doc;
-        doc["tp"] = "evt:history-rebuild-progress";
-        doc["total"] = rebuildProgress.total;
-        doc["current"] = rebuildProgress.current;
-        doc["status"] = rebuildProgress.status;
-        ws.textAll(doc.as<String>());
-    }
-
-    processOutboundMessages();
 }
 
 void WebUIPlugin::setupServer() {
@@ -217,15 +209,17 @@ void WebUIPlugin::setupServer() {
     if (controller->isSDCard()) {
         fs = &SD_MMC;
     }
-    server.on("/api/history/index.bin", HTTP_GET, [this](AsyncWebServerRequest *request) { handleHistoryFileDownload(request); });
-    server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
-    server.onNotFound([this](AsyncWebServerRequest *request) {
-        if (request->url().startsWith("/api/history/")) {
-            handleHistoryFileDownload(request);
-            return;
+    server.serveStatic("/api/history/", *fs, "/h/").setCacheControl("no-store");
+    server.on("/api/history/index.bin", HTTP_GET, [this, fs](AsyncWebServerRequest *request) {
+        // Serve the binary index file directly
+        if (fs->exists("/h/index.bin")) {
+            request->send(*fs, "/h/index.bin", "application/octet-stream");
+        } else {
+            request->send(404, "text/plain", "Index not found");
         }
-        request->send(SPIFFS, "/w/index.html");
     });
+    server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
+    server.onNotFound([](AsyncWebServerRequest *request) { request->send(SPIFFS, "/w/index.html"); });
     server.serveStatic("/", SPIFFS, "/w").setDefaultFile("index.html").setCacheControl("max-age=0");
     ws.onEvent(
         [this](AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
@@ -290,144 +284,82 @@ void WebUIPlugin::handleWebSocketData(AsyncWebSocket *server, AsyncWebSocketClie
     // If this is the final frame of the message, process and clear
     if (isFinal) {
         if (info->opcode == WS_TEXT) {
-            ESP_LOGV("WebUIPlugin", "Queueing request: %.*s", (int)buf.size(), buf.c_str());
-            RecursiveLockGuard lock(queueMutex);
-            inboundMessages.push_back(WebSocketInboundMessage{client->id(), String(buf.c_str())});
+            ESP_LOGV("WebUIPlugin", "Received request: %.*s", (int)buf.size(), buf.c_str());
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, buf.c_str());
+            if (!err) {
+                String msgType = doc["tp"].as<String>();
+                if (msgType.startsWith("req:profiles:")) {
+                    handleProfileRequest(client->id(), doc);
+                } else if (msgType == "req:ota-settings") {
+                    handleOTASettings(client->id(), doc);
+                } else if (msgType == "req:ota-start") {
+                    handleOTAStart(client->id(), doc);
+                } else if (msgType == "req:autotune-start") {
+                    handleAutotuneStart(client->id(), doc);
+                } else if (msgType == "req:process:activate") {
+                    controller->activate();
+                } else if (msgType == "req:process:deactivate") {
+                    controller->deactivate();
+                    controller->clear();
+                } else if (msgType == "req:process:clear") {
+                    controller->clear();
+                } else if (msgType == "req:grind:activate") {
+                    controller->activateGrind();
+                } else if (msgType == "req:grind:deactivate") {
+                    controller->deactivateGrind();
+                } else if (msgType == "req:change-grind-target") {
+                    if (doc["target"].is<uint8_t>()) {
+                        auto target = doc["target"].as<uint8_t>();
+                        controller->getSettings().setVolumetricTarget(target);
+                    }
+                } else if (msgType == "req:raise-temp") {
+                    controller->raiseTemp();
+                } else if (msgType == "req:lower-temp") {
+                    controller->lowerTemp();
+                } else if (msgType == "req:raise-grind-target") {
+                    controller->raiseGrindTarget();
+                } else if (msgType == "req:lower-grind-target") {
+                    controller->lowerGrindTarget();
+                } else if (msgType == "req:change-mode") {
+                    if (doc["mode"].is<uint8_t>()) {
+                        auto mode = doc["mode"].as<uint8_t>();
+                        controller->deactivate();
+                        controller->clear();
+                        controller->setMode(mode);
+                    }
+                } else if (msgType == "req:change-brew-target") {
+                    if (doc["target"].is<uint8_t>()) {
+                        auto target = doc["target"].as<uint8_t>();
+                        controller->getSettings().setVolumetricTarget(target);
+                    }
+                } else if (msgType == "req:history:rebuild") {
+                    // Handle rebuild asynchronously - send immediate ack, progress comes via events
+                    JsonDocument resp;
+                    resp["tp"] = "res:history:rebuild";
+                    if (doc["rid"].is<const char *>()) {
+                        resp["rid"] = doc["rid"];
+                    }
+                    resp["msg"] = "Rebuild started";
+                    size_t bufferSize = measureJson(resp);
+                    auto *buffer = ws.makeBuffer(bufferSize);
+                    serializeJson(resp, buffer->get(), bufferSize);
+                    client->text(buffer);
+                    ShotHistory.startAsyncRebuild();
+                } else if (msgType.startsWith("req:history")) {
+                    JsonDocument resp;
+                    ShotHistory.handleRequest(doc, resp);
+                    size_t bufferSize = measureJson(resp);
+                    auto *buffer = ws.makeBuffer(bufferSize);
+                    serializeJson(resp, buffer->get(), bufferSize);
+                    client->text(buffer);
+                } else if (msgType == "req:flush:start") {
+                    handleFlushStart(client->id(), doc);
+                }
+            }
         }
         // Done with this message
         rxBuffers.erase(cid);
-    }
-}
-
-void WebUIPlugin::handleWebSocketRequest(const WebSocketInboundMessage &message) {
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, message.payload);
-    if (err) {
-        ESP_LOGW("WebUIPlugin", "Invalid websocket payload: %s", err.c_str());
-        return;
-    }
-
-    String msgType = doc["tp"].as<String>();
-    if (msgType.startsWith("req:profiles:")) {
-        handleProfileRequest(message.clientId, doc);
-    } else if (msgType == "req:ota-settings") {
-        handleOTASettings(message.clientId, doc);
-    } else if (msgType == "req:ota-start") {
-        handleOTAStart(message.clientId, doc);
-    } else if (msgType == "req:autotune-start") {
-        handleAutotuneStart(message.clientId, doc);
-    } else if (msgType == "req:process:activate") {
-        controller->activate();
-    } else if (msgType == "req:process:deactivate") {
-        controller->deactivate();
-        controller->clear();
-    } else if (msgType == "req:process:clear") {
-        controller->clear();
-    } else if (msgType == "req:grind:activate") {
-        controller->activateGrind();
-    } else if (msgType == "req:grind:deactivate") {
-        controller->deactivateGrind();
-    } else if (msgType == "req:change-grind-target") {
-        if (doc["target"].is<uint8_t>()) {
-            auto target = doc["target"].as<uint8_t>();
-            controller->getSettings().setVolumetricTarget(target);
-        }
-    } else if (msgType == "req:raise-temp") {
-        controller->raiseTemp();
-    } else if (msgType == "req:lower-temp") {
-        controller->lowerTemp();
-    } else if (msgType == "req:raise-grind-target") {
-        controller->raiseGrindTarget();
-    } else if (msgType == "req:lower-grind-target") {
-        controller->lowerGrindTarget();
-    } else if (msgType == "req:change-mode") {
-        if (doc["mode"].is<uint8_t>()) {
-            auto mode = doc["mode"].as<uint8_t>();
-            controller->deactivate();
-            controller->clear();
-            controller->setMode(mode);
-        }
-    } else if (msgType == "req:change-brew-target") {
-        if (doc["target"].is<uint8_t>()) {
-            auto target = doc["target"].as<uint8_t>();
-            controller->getSettings().setVolumetricTarget(target);
-        }
-    } else if (msgType == "req:history:rebuild") {
-        JsonDocument resp;
-        resp["tp"] = "res:history:rebuild";
-        if (doc["rid"].is<const char *>()) {
-            resp["rid"] = doc["rid"];
-        }
-        resp["msg"] = "Rebuild started";
-        String payload;
-        serializeJson(resp, payload);
-        enqueueOutboundMessage(payload, false, message.clientId);
-        ShotHistory.startAsyncRebuild();
-    } else if (msgType.startsWith("req:history")) {
-        JsonDocument resp;
-        ShotHistory.handleRequest(doc, resp);
-        String payload;
-        serializeJson(resp, payload);
-        enqueueOutboundMessage(payload, false, message.clientId);
-    } else if (msgType == "req:flush:start") {
-        handleFlushStart(message.clientId, doc);
-    }
-}
-
-void WebUIPlugin::enqueueOutboundMessage(const String &payload, bool broadcast, uint32_t clientId) {
-    RecursiveLockGuard lock(queueMutex);
-    outboundMessages.push_back(WebSocketOutboundMessage{broadcast, clientId, payload});
-}
-
-void WebUIPlugin::processInboundMessages() {
-    std::deque<WebSocketInboundMessage> queue;
-    {
-        RecursiveLockGuard lock(queueMutex);
-        queue.swap(inboundMessages);
-    }
-
-    while (!queue.empty()) {
-        handleWebSocketRequest(queue.front());
-        queue.pop_front();
-    }
-}
-
-void WebUIPlugin::processOutboundMessages() {
-    std::deque<WebSocketOutboundMessage> queue;
-    {
-        RecursiveLockGuard lock(queueMutex);
-        queue.swap(outboundMessages);
-    }
-
-    while (!queue.empty()) {
-        const WebSocketOutboundMessage &message = queue.front();
-        if (message.broadcast) {
-            ws.textAll(message.payload);
-        } else {
-            ws.text(message.clientId, message.payload);
-        }
-        queue.pop_front();
-    }
-}
-
-void WebUIPlugin::handleDeferredActions() {
-    bool shouldApplySettings = false;
-    bool shouldRestart = false;
-    {
-        RecursiveLockGuard lock(queueMutex);
-        shouldApplySettings = pendingSettingsChanged;
-        shouldRestart = pendingRestart;
-        pendingSettingsChanged = false;
-        pendingRestart = false;
-    }
-
-    if (shouldApplySettings) {
-        pluginManager->trigger("settings:changed");
-        controller->setTargetTemp(controller->getTargetTemp());
-        controller->setPumpModelCoeffs();
-    }
-    if (shouldRestart) {
-        ESP.restart();
     }
 }
 
@@ -466,7 +398,7 @@ void WebUIPlugin::handleProfileRequest(uint32_t clientId, JsonDocument &request)
 
     if (type == "req:profiles:list") {
         auto arr = response["profiles"].to<JsonArray>();
-        for (auto const &id : profileManager->listProfilesSnapshot()) {
+        for (auto const &id : profileManager->listProfiles()) {
             Profile profile{};
             profileManager->loadProfile(id, profile);
             auto p = arr.add<JsonObject>();
@@ -520,12 +452,13 @@ void WebUIPlugin::handleProfileRequest(uint32_t clientId, JsonDocument &request)
         }
     }
 
-    String payload;
-    serializeJson(response, payload);
-    ws.text(clientId, payload);
+    size_t bufferSize = measureJson(response);
+    auto *buffer = ws.makeBuffer(bufferSize);
+    serializeJson(response, buffer->get(), bufferSize);
+    ws.text(clientId, buffer);
 }
 
-void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) {
+void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     if (request->method() == HTTP_POST) {
         controller->getSettings().batchUpdate([request](Settings *settings) {
             if (request->hasArg("startupMode"))
@@ -651,13 +584,12 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) {
                     schedules.push_back(AutoWakeupSchedule("07:00")); // Default fallback
                 }
                 settings->setAutoWakeupSchedules(schedules);
-                }
+            }
+            settings->save(true);
         });
-        {
-            RecursiveLockGuard lock(queueMutex);
-            pendingSettingsChanged = true;
-            pendingRestart = request->hasArg("restart");
-        }
+        pluginManager->trigger("settings:changed");
+        controller->setTargetTemp(controller->getTargetTemp());
+        controller->setPumpModelCoeffs();
     }
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
@@ -726,44 +658,9 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) {
     doc["autowakeupSchedules"] = schedulesStr;
     serializeJson(doc, *response);
     request->send(response);
-}
 
-void WebUIPlugin::handleHistoryFileDownload(AsyncWebServerRequest *request) {
-    constexpr const char *historyPrefix = "/api/history/";
-    String requestPath = request->url();
-    if (!requestPath.startsWith(historyPrefix)) {
-        request->send(404);
-        return;
-    }
-
-    String relativePath = requestPath.substring(strlen(historyPrefix));
-    if (relativePath.isEmpty() || relativePath.startsWith("/") || relativePath.indexOf("..") >= 0 || relativePath.indexOf('\\') >= 0) {
-        request->send(400, "text/plain", "Invalid path");
-        return;
-    }
-
-    if (!(relativePath == "index.bin" || relativePath.endsWith(".slog") || relativePath.endsWith(".json"))) {
-        request->send(404);
-        return;
-    }
-
-    std::vector<uint8_t> data;
-    if (!ShotHistory.readFileBytes("/h/" + relativePath, data)) {
-        request->send(404, "text/plain", "File not found");
-        return;
-    }
-
-    const char *contentType = relativePath.endsWith(".json") ? "application/json" : "application/octet-stream";
-    auto *response = request->beginResponse(contentType, data.size(),
-                                            [data = std::move(data)](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-                                                size_t remaining = data.size() - index;
-                                                size_t len = std::min(remaining, maxLen);
-                                                if (len > 0) {
-                                                    memcpy(buffer, data.data() + index, len);
-                                                }
-                                                return len;
-                                            });
-    request->send(response);
+    if (request->method() == HTTP_POST && request->hasArg("restart"))
+        ESP.restart();
 }
 
 void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {
@@ -823,7 +720,7 @@ void WebUIPlugin::updateOTAStatus(const String &version) {
     if (ws.getClients().empty()) {
         return;
     }
-    Settings &settings = controller->getSettings();
+    Settings const &settings = controller->getSettings();
     JsonDocument doc;
     doc["latestVersion"] = ota->getCurrentVersion();
     doc["tp"] = "res:ota-settings";
@@ -868,9 +765,7 @@ void WebUIPlugin::updateOTAStatus(const String &version) {
             doc["sdUsedPct"] = static_cast<uint8_t>((used * 100) / total);
         }
     }
-    String payload;
-    serializeJson(doc, payload);
-    enqueueOutboundMessage(payload, true);
+    ws.textAll(doc.as<String>());
 }
 
 void WebUIPlugin::updateOTAProgress(uint8_t phase, int progress) {
@@ -878,18 +773,16 @@ void WebUIPlugin::updateOTAProgress(uint8_t phase, int progress) {
     doc["tp"] = "evt:ota-progress";
     doc["phase"] = phase;
     doc["progress"] = progress;
-    String payload;
-    serializeJson(doc, payload);
-    enqueueOutboundMessage(payload, true);
+    String message = doc.as<String>();
+    ws.textAll(message);
 }
 
 void WebUIPlugin::sendAutotuneResult() {
     JsonDocument doc;
     doc["tp"] = "evt:autotune-result";
     doc["pid"] = controller->getSettings().getPid();
-    String payload;
-    serializeJson(doc, payload);
-    enqueueOutboundMessage(payload, true);
+    String message = doc.as<String>();
+    ws.textAll(message);
 }
 
 void WebUIPlugin::handleFlushStart(uint32_t clientId, JsonDocument &request) {
@@ -902,7 +795,7 @@ void WebUIPlugin::handleFlushStart(uint32_t clientId, JsonDocument &request) {
 
     String msg;
     serializeJson(response, msg);
-    enqueueOutboundMessage(msg, false, clientId);
+    ws.text(clientId, msg);
 }
 
 void WebUIPlugin::handleCoreDumpDownload(AsyncWebServerRequest *request) {
