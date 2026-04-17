@@ -1,4 +1,11 @@
-export function SettingsFormField({ label, htmlFor, helpText, children, className = '', noMargin = false }) {
+export function SettingsFormField({
+  label,
+  htmlFor,
+  helpText,
+  children,
+  className = '',
+  noMargin = false,
+}) {
   return (
     <div className={`form-control ${noMargin ? '' : 'mb-4'} ${className}`}>
       <label htmlFor={htmlFor} className='mb-2 block text-sm font-medium'>

@@ -6,7 +6,11 @@ import { useQuery } from 'preact-fetching';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import Card from '../../components/Card.jsx';
 import { Spinner } from '../../components/Spinner.jsx';
-import { InputGroupField, SettingsFormField, ToggleField } from '../../components/SettingsFormField.jsx';
+import {
+  InputGroupField,
+  SettingsFormField,
+  ToggleField,
+} from '../../components/SettingsFormField.jsx';
 import { timezones } from '../../config/zones.js';
 import { machine } from '../../services/ApiService.js';
 import { DASHBOARD_LAYOUTS, setDashboardLayout } from '../../utils/dashboardManager.js';
@@ -762,7 +766,11 @@ export function Settings() {
                 </div>
               </SettingsFormField>
             )}
-            <SettingsFormField label='Alt Relay / SSR2 Function' htmlFor='altRelayFunction' noMargin>
+            <SettingsFormField
+              label='Alt Relay / SSR2 Function'
+              htmlFor='altRelayFunction'
+              noMargin
+            >
               <select
                 id='altRelayFunction'
                 name='altRelayFunction'
