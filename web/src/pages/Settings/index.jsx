@@ -327,145 +327,6 @@ export function Settings() {
             </div>
           </Card>
 
-          {/* User Preferences */}
-          <Card sm={10} lg={5} title='User Preferences'>
-            <div className='form-control mb-4'>
-              <label htmlFor='startup-mode' className='mb-2 block text-sm font-medium'>
-                Startup Mode
-              </label>
-              <select
-                id='startup-mode'
-                name='startupMode'
-                className='select select-bordered w-full'
-                onChange={onChange('startupMode')}
-              >
-                <option value='standby' selected={formData.startupMode === 'standby'}>
-                  Standby
-                </option>
-                <option value='brew' selected={formData.startupMode === 'brew'}>
-                  Brew
-                </option>
-              </select>
-            </div>
-            <div className='form-control mb-4'>
-              <label htmlFor='standbyTimeout' className='mb-2 block text-sm font-medium'>
-                Standby Timeout
-              </label>
-              <div className='input-group'>
-                <label htmlFor='standbyTimeout' className='input w-full'>
-                  <input
-                    id='standbyTimeout'
-                    name='standbyTimeout'
-                    type='number'
-                    placeholder='0'
-                    value={formData.standbyTimeout}
-                    onChange={onChange('standbyTimeout')}
-                  />
-                  <span aria-label='seconds'>s</span>
-                </label>
-              </div>
-            </div>
-            <div className='form-control mb-4'>
-              <label htmlFor='flushDuration' className='mb-2 block text-sm font-medium'>
-                Flush Duration
-              </label>
-              <div className='mb-2 text-xs opacity-70'>
-                Maximum duration for flushing.  (1-60s)
-              </div>
-              <div className='input-group'>
-                <label htmlFor='flushDuration' className='input w-full'>
-                  <input
-                    id='flushDuration'
-                    name='flushDuration'
-                    type='number'
-                    min='1'
-                    max='60'
-                    placeholder='5'
-                    value={formData.flushDuration}
-                    onChange={onChange('flushDuration')}
-                  />
-                  <span aria-label='seconds'>s</span>
-                </label>
-              </div>
-            </div>
-
-            <div className='divider'>Predictive Scale Delay</div>
-            <div className='mb-2 text-sm opacity-70'>
-              Shuts off the process ahead of time based on the flow rate to account for any dripping
-              or delays in the control.
-            </div>
-            <div className='form-control mb-4'>
-              <label className='label cursor-pointer'>
-                <span className='label-text'>Auto Adjust</span>
-                <input
-                  id='delayAdjust'
-                  name='delayAdjust'
-                  type='checkbox'
-                  className='toggle toggle-primary'
-                  checked={!!formData.delayAdjust}
-                  onChange={onChange('delayAdjust')}
-                />
-              </label>
-            </div>
-            <div className='grid grid-cols-2 gap-4'>
-              <div className='form-control'>
-                <label htmlFor='brewDelay' className='mb-2 block text-sm font-medium'>
-                  Brew
-                </label>
-                <div className='input-group'>
-                  <label htmlFor='brewDelay' className='input w-full'>
-                    <input
-                      id='brewDelay'
-                      name='brewDelay'
-                      type='number'
-                      step='any'
-                      className='grow'
-                      placeholder='0'
-                      value={formData.brewDelay}
-                      onChange={onChange('brewDelay')}
-                    />
-                    <span aria-label='milliseconds'>ms</span>
-                  </label>
-                </div>
-              </div>
-              <div className='form-control'>
-                <label htmlFor='grindDelay' className='mb-2 block text-sm font-medium'>
-                  Grind
-                </label>
-                <div className='input-group'>
-                  <label htmlFor='grindDelay' className='input w-full'>
-                    <input
-                      id='grindDelay'
-                      name='grindDelay'
-                      type='number'
-                      step='any'
-                      className='grow'
-                      placeholder='0'
-                      value={formData.grindDelay}
-                      onChange={onChange('grindDelay')}
-                    />
-                    <span aria-label='milliseconds'>ms</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className='divider'>Switch Control</div>
-            <div className='form-control'>
-              <label className='label cursor-pointer'>
-                <span className='label-text'>Use momentary switches</span>
-                <input
-                  id='momentaryButtons'
-                  name='momentaryButtons'
-                  type='checkbox'
-                  className='toggle toggle-primary'
-                  checked={!!formData.momentaryButtons}
-                  onChange={onChange('momentaryButtons')}
-                />
-              </label>
-            </div>
-          </Card>
-
           {/* Web Settings */}
           <Card sm={10} lg={5} title='Web Settings'>
             <div className='form-control mb-4'>
@@ -588,6 +449,229 @@ export function Settings() {
                   className='toggle toggle-primary'
                   checked={!!formData.clock24hFormat}
                   onChange={onChange('clock24hFormat')}
+                />
+              </label>
+            </div>
+          </Card>
+
+          {/* Display Settings */}
+          <Card sm={10} lg={5} title='Display Settings'>
+            <div className='form-control mb-4'>
+              <label htmlFor='mainBrightness' className='mb-2 block text-sm font-medium'>
+                Main Brightness (1-16)
+              </label>
+              <input
+                id='mainBrightness'
+                name='mainBrightness'
+                type='number'
+                className='input input-bordered w-full'
+                placeholder='16'
+                min='1'
+                max='16'
+                value={formData.mainBrightness}
+                onChange={onChange('mainBrightness')}
+              />
+            </div>
+            <div className='divider'>Standby Display</div>
+            <div className='form-control mb-4'>
+              <label className='label cursor-pointer'>
+                <span className='label-text'>Enable standby display</span>
+                <input
+                  id='standbyDisplayEnabled'
+                  name='standbyDisplayEnabled'
+                  type='checkbox'
+                  className='toggle toggle-primary'
+                  checked={formData.standbyDisplayEnabled}
+                  onChange={onChange('standbyDisplayEnabled')}
+                />
+              </label>
+            </div>
+            <div className='form-control mb-4'>
+              <label htmlFor='standbyBrightness' className='mb-2 block text-sm font-medium'>
+                Standby Brightness (0-16)
+              </label>
+              <input
+                id='standbyBrightness'
+                name='standbyBrightness'
+                type='number'
+                className='input input-bordered w-full'
+                placeholder='8'
+                min='0'
+                max='16'
+                value={formData.standbyBrightness}
+                onChange={onChange('standbyBrightness')}
+                disabled={!formData.standbyDisplayEnabled}
+              />
+            </div>
+            <div className='form-control mb-4'>
+              <label htmlFor='standbyBrightnessTimeout' className='mb-2 block text-sm font-medium'>
+                Standby Brightness Timeout (s)
+              </label>
+              <div className='input-group'>
+                <label htmlFor='standbyBrightnessTimeout' className='input w-full'>
+                  <input
+                    id='standbyBrightnessTimeout'
+                    name='standbyBrightnessTimeout'
+                    type='number'
+                    className='grow'
+                    placeholder='60'
+                    min='1'
+                    value={formData.standbyBrightnessTimeout}
+                    onChange={onChange('standbyBrightnessTimeout')}
+                  />
+                  <span aria-label='seconds'>s</span>
+                </label>
+              </div>
+            </div>
+            <div className='form-control'>
+              <label htmlFor='themeMode' className='mb-2 block text-sm font-medium'>
+                Theme
+              </label>
+              <select
+                id='themeMode'
+                name='themeMode'
+                className='select select-bordered w-full'
+                value={formData.themeMode}
+                onChange={onChange('themeMode')}
+              >
+                <option value={0}>Dark Theme</option>
+                <option value={1}>Light Theme</option>
+              </select>
+            </div>
+          </Card>
+
+          {/* User Preferences */}
+          <Card sm={10} lg={5} title='User Preferences'>
+            <div className='form-control mb-4'>
+              <label htmlFor='startup-mode' className='mb-2 block text-sm font-medium'>
+                Startup Mode
+              </label>
+              <select
+                id='startup-mode'
+                name='startupMode'
+                className='select select-bordered w-full'
+                onChange={onChange('startupMode')}
+              >
+                <option value='standby' selected={formData.startupMode === 'standby'}>
+                  Standby
+                </option>
+                <option value='brew' selected={formData.startupMode === 'brew'}>
+                  Brew
+                </option>
+              </select>
+            </div>
+            <div className='form-control mb-4'>
+              <label htmlFor='standbyTimeout' className='mb-2 block text-sm font-medium'>
+                Standby Timeout
+              </label>
+              <div className='input-group'>
+                <label htmlFor='standbyTimeout' className='input w-full'>
+                  <input
+                    id='standbyTimeout'
+                    name='standbyTimeout'
+                    type='number'
+                    placeholder='0'
+                    value={formData.standbyTimeout}
+                    onChange={onChange('standbyTimeout')}
+                  />
+                  <span aria-label='seconds'>s</span>
+                </label>
+              </div>
+            </div>
+            <div className='form-control mb-4'>
+              <label htmlFor='flushDuration' className='mb-2 block text-sm font-medium'>
+                Flush Duration
+              </label>
+              <div className='mb-2 text-xs opacity-70'>Maximum duration for flushing. (1-60s)</div>
+              <div className='input-group'>
+                <label htmlFor='flushDuration' className='input w-full'>
+                  <input
+                    id='flushDuration'
+                    name='flushDuration'
+                    type='number'
+                    min='1'
+                    max='60'
+                    placeholder='5'
+                    value={formData.flushDuration}
+                    onChange={onChange('flushDuration')}
+                  />
+                  <span aria-label='seconds'>s</span>
+                </label>
+              </div>
+            </div>
+
+            <div className='divider'>Predictive Scale Delay</div>
+            <div className='mb-2 text-sm opacity-70'>
+              Shuts off the process ahead of time based on the flow rate to account for any dripping
+              or delays in the control.
+            </div>
+            <div className='form-control mb-4'>
+              <label className='label cursor-pointer'>
+                <span className='label-text'>Auto Adjust</span>
+                <input
+                  id='delayAdjust'
+                  name='delayAdjust'
+                  type='checkbox'
+                  className='toggle toggle-primary'
+                  checked={!!formData.delayAdjust}
+                  onChange={onChange('delayAdjust')}
+                />
+              </label>
+            </div>
+            <div className='grid grid-cols-2 gap-4'>
+              <div className='form-control'>
+                <label htmlFor='brewDelay' className='mb-2 block text-sm font-medium'>
+                  Brew
+                </label>
+                <div className='input-group'>
+                  <label htmlFor='brewDelay' className='input w-full'>
+                    <input
+                      id='brewDelay'
+                      name='brewDelay'
+                      type='number'
+                      step='any'
+                      className='grow'
+                      placeholder='0'
+                      value={formData.brewDelay}
+                      onChange={onChange('brewDelay')}
+                    />
+                    <span aria-label='milliseconds'>ms</span>
+                  </label>
+                </div>
+              </div>
+              <div className='form-control'>
+                <label htmlFor='grindDelay' className='mb-2 block text-sm font-medium'>
+                  Grind
+                </label>
+                <div className='input-group'>
+                  <label htmlFor='grindDelay' className='input w-full'>
+                    <input
+                      id='grindDelay'
+                      name='grindDelay'
+                      type='number'
+                      step='any'
+                      className='grow'
+                      placeholder='0'
+                      value={formData.grindDelay}
+                      onChange={onChange('grindDelay')}
+                    />
+                    <span aria-label='milliseconds'>ms</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className='divider'>Switch Control</div>
+            <div className='form-control'>
+              <label className='label cursor-pointer'>
+                <span className='label-text'>Use momentary switches</span>
+                <input
+                  id='momentaryButtons'
+                  name='momentaryButtons'
+                  type='checkbox'
+                  className='toggle toggle-primary'
+                  checked={!!formData.momentaryButtons}
+                  onChange={onChange('momentaryButtons')}
                 />
               </label>
             </div>
@@ -781,92 +865,6 @@ export function Settings() {
                 <option value={2} disabled className='text-gray-400'>
                   Steam Boiler (Coming Soon)
                 </option>
-              </select>
-            </div>
-          </Card>
-
-          {/* Display Settings */}
-          <Card sm={10} lg={5} title='Display Settings'>
-            <div className='form-control mb-4'>
-              <label htmlFor='mainBrightness' className='mb-2 block text-sm font-medium'>
-                Main Brightness (1-16)
-              </label>
-              <input
-                id='mainBrightness'
-                name='mainBrightness'
-                type='number'
-                className='input input-bordered w-full'
-                placeholder='16'
-                min='1'
-                max='16'
-                value={formData.mainBrightness}
-                onChange={onChange('mainBrightness')}
-              />
-            </div>
-            <div className='divider'>Standby Display</div>
-            <div className='form-control mb-4'>
-              <label className='label cursor-pointer'>
-                <span className='label-text'>Enable standby display</span>
-                <input
-                  id='standbyDisplayEnabled'
-                  name='standbyDisplayEnabled'
-                  type='checkbox'
-                  className='toggle toggle-primary'
-                  checked={formData.standbyDisplayEnabled}
-                  onChange={onChange('standbyDisplayEnabled')}
-                />
-              </label>
-            </div>
-            <div className='form-control mb-4'>
-              <label htmlFor='standbyBrightness' className='mb-2 block text-sm font-medium'>
-                Standby Brightness (0-16)
-              </label>
-              <input
-                id='standbyBrightness'
-                name='standbyBrightness'
-                type='number'
-                className='input input-bordered w-full'
-                placeholder='8'
-                min='0'
-                max='16'
-                value={formData.standbyBrightness}
-                onChange={onChange('standbyBrightness')}
-                disabled={!formData.standbyDisplayEnabled}
-              />
-            </div>
-            <div className='form-control mb-4'>
-              <label htmlFor='standbyBrightnessTimeout' className='mb-2 block text-sm font-medium'>
-                Standby Brightness Timeout (s)
-              </label>
-              <div className='input-group'>
-                <label htmlFor='standbyBrightnessTimeout' className='input w-full'>
-                  <input
-                    id='standbyBrightnessTimeout'
-                    name='standbyBrightnessTimeout'
-                    type='number'
-                    className='grow'
-                    placeholder='60'
-                    min='1'
-                    value={formData.standbyBrightnessTimeout}
-                    onChange={onChange('standbyBrightnessTimeout')}
-                  />
-                  <span aria-label='seconds'>s</span>
-                </label>
-              </div>
-            </div>
-            <div className='form-control'>
-              <label htmlFor='themeMode' className='mb-2 block text-sm font-medium'>
-                Theme
-              </label>
-              <select
-                id='themeMode'
-                name='themeMode'
-                className='select select-bordered w-full'
-                value={formData.themeMode}
-                onChange={onChange('themeMode')}
-              >
-                <option value={0}>Dark Theme</option>
-                <option value={1}>Light Theme</option>
               </select>
             </div>
           </Card>
