@@ -272,6 +272,8 @@ void ShotHistoryPlugin::startRecording() {
     if (snapshot.available && snapshot.isBrew && snapshot.utility) {
         return;
     }
+    // Capture initial volumetric mode state (brew by weight vs brew by time)
+    shotStartedVolumetric = snapshot.available && snapshot.isBrew && snapshot.target == ProcessTarget::VOLUMETRIC;
     currentId = padId(String(controller->getSettings().getHistoryIndex()));
     shotStart = millis();
     lastWeightChangeTime = 0;
@@ -289,9 +291,6 @@ void ShotHistoryPlugin::startRecording() {
 
     // Reset phase tracking for new shot
     lastRecordedPhase = 0xFF; // Invalid value to detect first phase
-
-    // Capture initial volumetric mode state (brew by weight vs brew by time)
-    shotStartedVolumetric = controller->getSettings().isVolumetricTarget();
 }
 
 unsigned long ShotHistoryPlugin::getTime() {
