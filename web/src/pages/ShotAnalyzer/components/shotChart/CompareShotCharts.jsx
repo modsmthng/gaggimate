@@ -1,3 +1,5 @@
+/* global globalThis */
+
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import Chart from 'chart.js/auto';
@@ -1241,8 +1243,7 @@ function CompareChartCanvas({
       if (!point) return;
       applyCompareHover(chart, point.clientX, point.clientY);
     };
-    const supportsPointerEvents =
-      globalThis.window !== undefined && Boolean(globalThis.window.PointerEvent);
+    const supportsPointerEvents = Boolean(globalThis.window?.PointerEvent);
 
     if (hoverSurface && enableHoverInfo) {
       addCompareHoverListeners(hoverSurface, supportsPointerEvents, handleHoverMove, clearHover);
@@ -1327,11 +1328,15 @@ export function CompareShotCharts({
     ...(showPhaseAnnotations ? [] : ['Phase Names']),
     ...(showStopAnnotations ? [] : ['Stops']),
   ];
-  const hasWeightData = compareEntries.some(entry =>
-    entry.shot?.samples?.some(sample => Number(sample?.v) > 0),
+  const hasWeightData = compareEntries.some(
+    entry =>
+      Array.isArray(entry.shot?.samples) &&
+      entry.shot.samples.some(sample => Number(sample?.v) > 0),
   );
-  const hasWeightFlowData = compareEntries.some(entry =>
-    entry.shot?.samples?.some(sample => Number(sample?.vf) > 0),
+  const hasWeightFlowData = compareEntries.some(
+    entry =>
+      Array.isArray(entry.shot?.samples) &&
+      entry.shot.samples.some(sample => Number(sample?.vf) > 0),
   );
 
   useEffect(() => {
