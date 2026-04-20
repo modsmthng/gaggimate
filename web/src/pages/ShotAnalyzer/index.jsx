@@ -123,6 +123,15 @@ function clearCompareSelectionState({
   setCompareIsSearchingProfile(false);
 }
 
+function buildShotWithMetadata({ item, loadedShot, importMode, loadKey }) {
+  return {
+    ...loadedShot,
+    source: loadedShot.source || item.source || importMode,
+    storageKey: loadedShot.storageKey || item.storageKey || item.name || String(loadKey),
+    name: loadedShot.name || item.name || item.storageKey || String(loadKey),
+  };
+}
+
 function buildCompareShotWithMetadata({ item, loadedShot, importMode, loadKey }) {
   return {
     ...loadedShot,
@@ -180,6 +189,236 @@ function beginCompareShotLoad({
   setComparePendingKeys([shotKey]);
   setCompareIsSearchingProfile(false);
   return loadId;
+}
+
+function clearComparePendingSelectionState({
+  setPendingCompareSelection,
+  setComparePendingKeys,
+  setCompareIsSearchingProfile,
+}) {
+  setPendingCompareSelection(null);
+  setComparePendingKeys([]);
+  setCompareIsSearchingProfile(false);
+}
+
+function applyPendingCompareSelectionState(
+  selectionRequest,
+  setPendingCompareSelection,
+  setComparePendingKeys,
+) {
+  const nextShotKey = getShotIdentityKey(selectionRequest?.item);
+  setPendingCompareSelection({
+    shot: selectionRequest.item,
+    name: selectionRequest.name,
+  });
+  setComparePendingKeys(nextShotKey ? [nextShotKey] : []);
+}
+
+function getDirectionalCompareSelectionRequest(selectionRequest, loadId) {
+  const nextSelection = getNextDirectionalSelection(selectionRequest);
+  if (!nextSelection) return null;
+  return {
+    ...nextSelection,
+    loadId,
+  };
+}
+
+function getActivePrimaryShotKey(pendingPrimarySelectionRef, currentShotRef) {
+  const activePrimaryShot = pendingPrimarySelectionRef.current?.shot || currentShotRef.current;
+  return activePrimaryShot ? getShotIdentityKey(activePrimaryShot) : '';
+}
+
+function shouldAbortCompareLoad({
+  requestId,
+  compareSelectionRequestIdRef,
+  loadId,
+  compareLoadIdRef,
+}) {
+  return (
+    requestId !== compareSelectionRequestIdRef.current ||
+    !isCurrentCompareLoad(loadId, compareLoadIdRef)
+  );
+}
+
+function advanceCompareSelectionAfterFailure({
+  selectionRequest,
+  loadId,
+  setPendingCompareSelection,
+  setComparePendingKeys,
+  clearPendingState,
+}) {
+  const nextSelection = getDirectionalCompareSelectionRequest(selectionRequest, loadId);
+  if (!nextSelection) {
+    clearPendingState();
+    return null;
+  }
+
+  applyPendingCompareSelectionState(
+    nextSelection,
+    setPendingCompareSelection,
+    setComparePendingKeys,
+  );
+  return nextSelection;
+}
+
+function commitLoadedCompareSelection({
+  targetShotKey,
+  shotWithMetadata,
+  item,
+  loadKey,
+  setCompareShots,
+  setPendingCompareSelection,
+  setComparePendingKeys,
+}) {
+  setCompareShots([
+    createCompareShotEntry({ shotKey: targetShotKey, shotWithMetadata, item, loadKey }),
+  ]);
+  setPendingCompareSelection(null);
+  setComparePendingKeys([]);
+}
+
+function finalizeCompareSelectionAttempt({
+  requestId,
+  compareSelectionRequestIdRef,
+  item,
+  setCompareIsSearchingProfile,
+}) {
+  if (requestId === compareSelectionRequestIdRef.current && !item?.profile) {
+    setCompareIsSearchingProfile(false);
+  }
+}
+
+async function executeCompareSelectionLoad({
+  requestId,
+  selectionRequest,
+  importMode,
+  compareSelectionRequestIdRef,
+  compareLoadIdRef,
+  pendingPrimarySelectionRef,
+  currentShotRef,
+  setPendingCompareSelection,
+  setComparePendingKeys,
+  setCompareIsSearchingProfile,
+  setCompareShots,
+}) {
+  const clearPendingState = () =>
+    clearComparePendingSelectionState({
+      setPendingCompareSelection,
+      setComparePendingKeys,
+      setCompareIsSearchingProfile,
+    });
+
+  let activeRequest = selectionRequest;
+
+  while (activeRequest) {
+    const { item, loadId } = activeRequest;
+    const targetShotKey = getShotIdentityKey(item);
+    const activePrimaryShotKey = getActivePrimaryShotKey(
+      pendingPrimarySelectionRef,
+      currentShotRef,
+    );
+
+    if (!targetShotKey) {
+      clearPendingState();
+      return false;
+    }
+
+    if (activePrimaryShotKey && targetShotKey === activePrimaryShotKey) {
+      activeRequest = advanceCompareSelectionAfterFailure({
+        selectionRequest: activeRequest,
+        loadId,
+        setPendingCompareSelection,
+        setComparePendingKeys,
+        clearPendingState,
+      });
+      if (!activeRequest) return false;
+      continue;
+    }
+
+    try {
+      const { shotWithMetadata, loadKey } = await loadCompareShotSelection({ item, importMode });
+      if (
+        shouldAbortCompareLoad({
+          requestId,
+          compareSelectionRequestIdRef,
+          loadId,
+          compareLoadIdRef,
+        })
+      )
+        return false;
+
+      commitLoadedCompareSelection({
+        targetShotKey,
+        shotWithMetadata,
+        item,
+        loadKey,
+        setCompareShots,
+        setPendingCompareSelection,
+        setComparePendingKeys,
+      });
+
+      await tryAutoMatchCompareShotProfile({
+        loadId,
+        compareLoadIdRef,
+        shotKey: targetShotKey,
+        shotWithMetadata,
+        setCompareIsSearchingProfile,
+        setCompareShots,
+      });
+
+      return true;
+    } catch (error) {
+      if (
+        shouldAbortCompareLoad({
+          requestId,
+          compareSelectionRequestIdRef,
+          loadId,
+          compareLoadIdRef,
+        })
+      )
+        return false;
+
+      console.warn('Failed to load compare shot:', error);
+
+      activeRequest = advanceCompareSelectionAfterFailure({
+        selectionRequest: activeRequest,
+        loadId,
+        setPendingCompareSelection,
+        setComparePendingKeys,
+        clearPendingState,
+      });
+      if (!activeRequest) return false;
+    } finally {
+      finalizeCompareSelectionAttempt({
+        requestId,
+        compareSelectionRequestIdRef,
+        item,
+        setCompareIsSearchingProfile,
+      });
+    }
+  }
+
+  clearPendingState();
+  return false;
+}
+
+async function loadShotSelection({ item, importMode }) {
+  const loadKey = getShotSelectionLoadKey(item);
+  const loadedShot = hasLoadedShotPayload(item)
+    ? item
+    : await libraryService.loadShot(loadKey, item.source);
+  const shotWithMetadata = buildShotWithMetadata({
+    item,
+    loadedShot,
+    importMode,
+    loadKey,
+  });
+
+  return {
+    loadKey,
+    shotName: getShotSelectionName(item, loadKey),
+    shotWithMetadata,
+  };
 }
 
 async function loadCompareShotSelection({ item, importMode }) {
