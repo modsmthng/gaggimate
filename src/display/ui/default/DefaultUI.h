@@ -58,7 +58,7 @@ class DefaultUI {
     void applyTheme();
 
     bool isTaskHealthy() const {
-        return is_task_healthy(eTaskGetState(taskHandle)) && is_task_healthy(eTaskGetState(profileTaskHandle));
+        return is_task_healthy(eTaskGetState(taskHandle));
     }
 
   private:
