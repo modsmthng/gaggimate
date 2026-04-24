@@ -89,6 +89,8 @@ class Controller {
     virtual float getCurrentPuckFlow() const { return currentPuckFlow; }
     virtual float getCurrentPumpFlow() const { return currentPumpFlow; }
 
+    bool isTaskHealthy() const { return is_task_healthy(eTaskGetState(taskHandle)); }
+
     void autotune(int testTime, int samples);
     void startProcess(Process *process);
     Settings &getSettings() { return settings; }
